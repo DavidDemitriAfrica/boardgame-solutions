@@ -559,6 +559,19 @@ function renderAll() {
   renderTown(0);
   renderTown(1);
   renderScores();
+  updateTurnBadges();
+}
+
+function updateTurnBadges() {
+  if (!state) return;
+  const headers = [
+    townEls[0].parentElement.querySelector('h2'),
+    townEls[1].parentElement.querySelector('h2'),
+  ];
+  headers[0].innerHTML = 'Your Town (P1)' +
+    (state.player === 0 && !state.isTerminal() ? ' <span class="turn-badge">YOUR TURN</span>' : '');
+  headers[1].innerHTML = 'AI Town (P2)' +
+    (state.player === 1 && !state.isTerminal() ? ' <span class="turn-badge">AI TURN</span>' : '');
 }
 
 // ============================================================================
@@ -639,6 +652,15 @@ document.addEventListener('keydown', (e) => {
   if ((e.key === 'r' || e.key === 'R') && !placementPanel.classList.contains('hidden')) {
     doRotate();
   }
+  // Enter to confirm draft, Escape to cancel
+  if (e.key === 'Enter' && selectedDraftOffset !== null) {
+    confirmDraft();
+  }
+  if (e.key === 'Escape') {
+    if (selectedDraftOffset !== null) cancelDraft();
+    if (!rulesPanel.classList.contains('hidden')) rulesPanel.classList.add('hidden');
+    if (!endModal.classList.contains('hidden')) endModal.classList.add('hidden');
+  }
 });
 
 // ============================================================================
@@ -648,3 +670,6 @@ document.addEventListener('keydown', (e) => {
 function delay(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
+
+// Auto-start on load
+startGame();
