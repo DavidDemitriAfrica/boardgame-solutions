@@ -47,6 +47,7 @@ const endCloseBtn = $('end-close-btn');
 // ============================================================================
 
 let state = null;       // GameState
+let stateHistory = [];  // for undo
 let aiType = 'lookahead';
 let rot180 = false;     // current rotation for placement
 let selectedDraftOffset = null;
@@ -352,7 +353,9 @@ function renderScores() {
 
     const totalRow = document.createElement('div');
     totalRow.className = 'score-row total';
-    totalRow.innerHTML = `<span class="score-label">Total</span><span class="score-val">${total}</span>`;
+    const diff = idx === 0 ? s1 - s2 : s2 - s1;
+    const diffStr = diff > 0 ? ` (+${diff})` : diff < 0 ? ` (${diff})` : '';
+    totalRow.innerHTML = `<span class="score-label">Total</span><span class="score-val">${total}${diffStr}</span>`;
     el.appendChild(totalRow);
   });
 }
@@ -428,6 +431,7 @@ function handlePlacement(ax, ay) {
   const cardId = isFree ? state.free[0][0] : state.drafted;
   const label = isFree ? 'free card' : 'card';
   log(`You place ${label} #${cardId} at (${ax},${ay})${rot180 ? ' rotated' : ''}`, 0);
+  stateHistory.push(state);
   hidePlacementUI();
   state = applyAction(state, action);
   rot180 = false;
@@ -466,6 +470,7 @@ function confirmDraft() {
   let msg = `You draft card #${cardId}`;
   if (offset > 0) msg += ` (giving ${offset} card${offset > 1 ? 's' : ''} to AI)`;
   log(msg, 0);
+  stateHistory.push(state);
   draftControls.classList.add('hidden');
   draftInfo.textContent = '';
   selectedDraftOffset = null;
@@ -486,20 +491,28 @@ function cancelDraft() {
 
 async function aiTurn() {
   busy = true;
-  setStatus('AI is thinking...');
   renderAll();
   await delay(100);
 
   while (!state.isTerminal() && state.player === 1) {
+    const isDraft = state.phase === Phase.DRAFT;
+    if (isDraft) {
+      setStatus('AI is thinking...');
+      await delay(50); // let the status render before heavy computation
+    }
+
+    const t0 = performance.now();
     const action = aiType === 'lookahead'
       ? pickActionLookahead(state, state.bonusNames)
       : pickActionGreedy(state, state.bonusNames);
+    const elapsed = performance.now() - t0;
     if (action === null) break;
 
     if (action.type === 'draft') {
       const cardId = state.circle[action.offset];
       let msg = `AI drafts card #${cardId}`;
       if (action.offset > 0) msg += ` (skipping ${action.offset} to you)`;
+      msg += ` [${(elapsed/1000).toFixed(1)}s]`;
       log(msg, 1);
     } else {
       const [ax, ay, r] = action;
@@ -580,15 +593,30 @@ function updateTurnBadges() {
 
 function showEndModal() {
   const [s1, s2] = computeScores(state.towns[0], state.towns[1], state.bonusNames);
+  const [b1, b2] = computeScoreBreakdown(state.towns[0], state.towns[1], state.bonusNames);
+  const diff = s1 - s2;
   let result;
   if (s1 > s2) result = '<div class="winner">You win!</div>';
   else if (s2 > s1) result = '<div class="winner">AI wins!</div>';
   else result = '<div class="winner">It\'s a tie!</div>';
-  endScores.innerHTML = `${result}<br>You: <b>${s1}</b> &nbsp; AI: <b>${s2}</b>`;
+
+  let breakdown = `${result}<br>`;
+  breakdown += `<div style="text-align:left;font-size:0.85rem;margin:0.5rem auto;max-width:250px">`;
+  breakdown += `<div style="display:flex;justify-content:space-between;padding:2px 0"><span></span><span style="color:#7ec8e3">You</span><span style="color:#ff8a80">AI</span></div>`;
+  breakdown += `<div style="display:flex;justify-content:space-between;padding:2px 0;border-bottom:1px solid #444"><span>Terrain</span><span style="color:#7ec8e3">${b1.terrain}</span><span style="color:#ff8a80">${b2.terrain}</span></div>`;
+  for (const name of state.bonusNames) {
+    if (!name) continue;
+    const v1 = b1[name] || 0, v2 = b2[name] || 0;
+    breakdown += `<div style="display:flex;justify-content:space-between;padding:2px 0;font-size:0.8rem"><span>${name}</span><span style="color:#7ec8e3">${v1}</span><span style="color:#ff8a80">${v2}</span></div>`;
+  }
+  breakdown += `<div style="display:flex;justify-content:space-between;padding:4px 0;border-top:1px solid #444;font-weight:700"><span>Total</span><span style="color:#7ec8e3">${s1}</span><span style="color:#ff8a80">${s2}</span></div>`;
+  breakdown += `</div>`;
+
+  endScores.innerHTML = breakdown;
   endModal.classList.remove('hidden');
   endModal.style.display = '';
   setStatus('Game over!');
-  log(`Game over. You: ${s1}, AI: ${s2}. ${s1 > s2 ? 'You win!' : s2 > s1 ? 'AI wins!' : 'Tie!'}`, null);
+  log(`Game over. You: ${s1}, AI: ${s2} (${diff >= 0 ? '+' : ''}${diff}). ${s1 > s2 ? 'You win!' : s2 > s1 ? 'AI wins!' : 'Tie!'}`, null);
 }
 
 // ============================================================================
@@ -602,6 +630,7 @@ function startGame() {
   selectedDraftOffset = null;
   ghostAnchor = null;
   busy = false;
+  stateHistory = [];
   logContent.innerHTML = '';
   endModal.classList.add('hidden');
   draftControls.classList.add('hidden');
@@ -623,10 +652,12 @@ function startGame() {
 // Event listeners
 // ============================================================================
 
+const undoBtn = $('undo-btn');
 newGameBtn.addEventListener('click', startGame);
 endCloseBtn.addEventListener('click', startGame);
 draftConfirmBtn.addEventListener('click', confirmDraft);
 draftCancelBtn.addEventListener('click', cancelDraft);
+undoBtn.addEventListener('click', undoAction);
 
 rulesToggleBtn.addEventListener('click', () => {
   rulesPanel.classList.toggle('hidden');
@@ -661,11 +692,29 @@ document.addEventListener('keydown', (e) => {
     if (!rulesPanel.classList.contains('hidden')) rulesPanel.classList.add('hidden');
     if (!endModal.classList.contains('hidden')) endModal.classList.add('hidden');
   }
+  // Ctrl+Z to undo
+  if (e.key === 'z' && (e.ctrlKey || e.metaKey) && !e.shiftKey) {
+    e.preventDefault();
+    undoAction();
+  }
 });
 
 // ============================================================================
 // Helpers
 // ============================================================================
+
+function undoAction() {
+  if (busy || stateHistory.length === 0) return;
+  state = stateHistory.pop();
+  rot180 = false;
+  rotateBtn.classList.remove('active');
+  selectedDraftOffset = null;
+  ghostAnchor = null;
+  draftControls.classList.add('hidden');
+  log('(undo)', null);
+  hidePlacementUI();
+  afterAction();
+}
 
 function delay(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
