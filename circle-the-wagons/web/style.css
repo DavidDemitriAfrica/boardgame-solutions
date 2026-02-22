@@ -217,11 +217,8 @@ button:disabled { opacity: 0.4; cursor: not-allowed; }
   border: 2px solid var(--border);
   border-radius: 4px;
   cursor: default;
-  display: grid;
-  grid-template-columns: var(--cell-size) var(--cell-size);
-  grid-template-rows: var(--cell-size) var(--cell-size);
-  position: absolute;
-  transition: border-color 0.15s, opacity 0.15s, transform 0.2s;
+  /* position/display/grid set inline by JS for radial layout */
+  transition: border-color 0.15s, opacity 0.15s;
 }
 
 .circle-card.clickable {
@@ -230,8 +227,8 @@ button:disabled { opacity: 0.4; cursor: not-allowed; }
 
 .circle-card.clickable:hover {
   border-color: var(--accent);
-  transform: translate(-50%, -50%) scale(1.08);
   z-index: 5;
+  filter: brightness(1.15);
 }
 
 .circle-card.selected {

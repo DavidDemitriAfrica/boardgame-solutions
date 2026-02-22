@@ -67,23 +67,37 @@ function makeCell(terr, icon) {
 }
 
 // ============================================================================
-// Rendering: card preview
+// Rendering: card as a 2x2 mini-grid element
+// ============================================================================
+
+function makeCardElement(card, r180) {
+  const wrapper = document.createElement('div');
+  wrapper.style.display = 'grid';
+  wrapper.style.gridTemplateColumns = 'var(--cell-size) var(--cell-size)';
+  wrapper.style.gridTemplateRows = 'var(--cell-size) var(--cell-size)';
+  // Top row first: j=1, then j=0
+  for (let j = 1; j >= 0; j--) {
+    for (let i = 0; i < 2; i++) {
+      const [t, ic] = tileAt(card, i, j, r180);
+      wrapper.appendChild(makeCell(t, ic));
+    }
+  }
+  return wrapper;
+}
+
+// ============================================================================
+// Rendering: card preview (placement panel)
 // ============================================================================
 
 function renderCardPreview(cardId, r180) {
   cardPreview.innerHTML = '';
-  const card = CARDS[cardId];
-  // Grid order: TL(0,1) TR(1,1) / BL(0,0) BR(1,0) — top row first
-  for (let j = 1; j >= 0; j--) {
-    for (let i = 0; i < 2; i++) {
-      const [t, ic] = tileAt(card, i, j, r180);
-      cardPreview.appendChild(makeCell(t, ic));
-    }
-  }
+  const grid = makeCardElement(CARDS[cardId], r180);
+  // Transfer children into the preview grid
+  while (grid.firstChild) cardPreview.appendChild(grid.firstChild);
 }
 
 // ============================================================================
-// Rendering: circle
+// Rendering: circle (radial layout)
 // ============================================================================
 
 function renderCircle() {
@@ -92,98 +106,89 @@ function renderCircle() {
   const n = state.circle.length;
   circleCount.textContent = `(${n} cards)`;
   if (n === 0) {
-    circleContainer.style.width = '0';
-    circleContainer.style.height = '0';
+    circleContainer.style.width = '0px';
+    circleContainer.style.height = '0px';
     return;
   }
   const isDraftPhase = state.phase === Phase.DRAFT && state.player === 0 && !busy;
 
-  // Card dimensions (read from CSS variable)
-  const cs = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--cell-size'));
-  const cardW = cs * 2 + 6; // 2 cells + border
-  const cardH = cs * 2 + 6;
+  // Card pixel size from CSS variable
+  const csVal = getComputedStyle(document.documentElement).getPropertyValue('--cell-size');
+  const cs = parseFloat(csVal) || 40;
+  const cardW = cs * 2 + 4; // 2 cells + borders
+  const halfCard = cardW / 2;
 
-  // Compute radius so cards don't overlap
-  // Circumference must fit n cards with gaps: 2*pi*r >= n * (cardW + gap)
-  const gap = 12;
-  const minRadius = Math.max(80, (n * (cardW + gap)) / (2 * Math.PI));
-  const radius = minRadius;
+  // Radius: circumference must fit n cards with gaps
+  const gap = 14;
+  const radius = Math.max(100, (n * (cardW + gap)) / (2 * Math.PI));
 
-  // Container size
-  const containerSize = Math.ceil(2 * radius + cardW + 40);
-  circleContainer.style.width = containerSize + 'px';
-  circleContainer.style.height = containerSize + 'px';
-  const cx = containerSize / 2;
-  const cy = containerSize / 2;
+  // Container: big enough for the circle + cards
+  const size = Math.ceil(2 * radius + cardW + 60);
+  circleContainer.style.width = size + 'px';
+  circleContainer.style.height = size + 'px';
+  circleContainer.style.position = 'relative';
+  const cx = size / 2;
+  const cy = size / 2;
 
-  // Draw connector lines between adjacent cards
-  for (let idx = 0; idx < n; idx++) {
-    const angle1 = (idx / n) * 2 * Math.PI - Math.PI / 2;
-    const angle2 = ((idx + 1) % n / n) * 2 * Math.PI - Math.PI / 2;
-    const x1 = cx + radius * Math.cos(angle1);
-    const y1 = cy + radius * Math.sin(angle1);
-    const x2 = cx + radius * Math.cos(angle2);
-    const y2 = cy + radius * Math.sin(angle2);
+  // Draw connector ring segments between adjacent cards
+  for (let i = 0; i < n; i++) {
+    const a1 = (i / n) * 2 * Math.PI - Math.PI / 2;
+    const a2 = ((i + 1) % n / n) * 2 * Math.PI - Math.PI / 2;
+    const x1 = cx + radius * Math.cos(a1);
+    const y1 = cy + radius * Math.sin(a1);
+    const x2 = cx + radius * Math.cos(a2);
+    const y2 = cy + radius * Math.sin(a2);
     const dx = x2 - x1, dy = y2 - y1;
     const len = Math.sqrt(dx * dx + dy * dy);
-    const ang = Math.atan2(dy, dx) * 180 / Math.PI;
+    const ang = Math.atan2(dy, dx);
 
     const line = document.createElement('div');
-    line.className = 'circle-connector';
-    line.style.left = x1 + 'px';
-    line.style.top = y1 + 'px';
-    line.style.width = len + 'px';
-    line.style.transform = `rotate(${ang}deg)`;
+    line.style.cssText = `position:absolute;left:${x1}px;top:${y1}px;width:${len}px;height:2px;background:rgba(255,255,255,0.08);transform-origin:0 50%;transform:rotate(${ang}rad);pointer-events:none;`;
     circleContainer.appendChild(line);
   }
 
-  // Place cards radially
+  // Place each card radially
   state.circle.forEach((cid, idx) => {
     const card = CARDS[cid];
-    const angle = (idx / n) * 2 * Math.PI - Math.PI / 2; // start at top
-    const x = cx + radius * Math.cos(angle);
-    const y = cy + radius * Math.sin(angle);
+    const angle = (idx / n) * 2 * Math.PI - Math.PI / 2; // top = 12 o'clock
+    const px = cx + radius * Math.cos(angle) - halfCard;
+    const py = cy + radius * Math.sin(angle) - halfCard;
 
-    const wrapper = document.createElement('div');
-    wrapper.className = 'circle-card';
-    wrapper.style.left = x + 'px';
-    wrapper.style.top = y + 'px';
-    wrapper.style.transform = 'translate(-50%, -50%)';
-    if (isDraftPhase) wrapper.classList.add('clickable');
+    const el = document.createElement('div');
+    el.className = 'circle-card' + (isDraftPhase ? ' clickable' : '');
+    el.style.cssText = `position:absolute;left:${px}px;top:${py}px;display:grid;grid-template-columns:var(--cell-size) var(--cell-size);grid-template-rows:var(--cell-size) var(--cell-size);`;
 
     // Card label
-    const label = document.createElement('div');
+    const label = document.createElement('span');
     label.className = 'card-label';
     label.textContent = `#${cid}`;
-    wrapper.appendChild(label);
+    el.appendChild(label);
 
-    // 2x2 grid: TL TR / BL BR
-    for (let j = 1; j >= 0; j--) {
+    // 4 cells
+    for (let j = 1; j >= 0; j--)
       for (let i = 0; i < 2; i++) {
         const [t, ic] = tileAt(card, i, j, false);
-        wrapper.appendChild(makeCell(t, ic));
+        el.appendChild(makeCell(t, ic));
       }
-    }
 
-    // Draft interaction
     if (isDraftPhase) {
-      wrapper.addEventListener('click', () => selectDraft(idx));
+      el.addEventListener('click', () => selectDraft(idx));
     }
 
-    // Mark selected/skipped
+    // Selected / skipped state
     if (selectedDraftOffset !== null) {
       if (idx === selectedDraftOffset) {
-        wrapper.classList.add('selected');
+        el.classList.add('selected');
       } else if (idx < selectedDraftOffset) {
-        wrapper.classList.add('skipped');
-        const skipLabel = document.createElement('div');
-        skipLabel.className = 'skip-label';
-        skipLabel.textContent = '\u2192 AI';
-        wrapper.appendChild(skipLabel);
+        el.classList.add('skipped');
+        const skip = document.createElement('span');
+        skip.className = 'skip-label';
+        skip.textContent = '\u2192 AI';
+        el.appendChild(skip);
       }
     }
 
-    circleContainer.appendChild(wrapper);
+    circleContainer.appendChild(el);
   });
 }
 
@@ -217,13 +222,11 @@ function renderTown(playerIdx) {
     (state.phase === Phase.PLACE_FREE || state.phase === Phase.PLACE_DRAFT) &&
     state.player === 0;
 
-  // Determine bounds — expand for placement anchors if human is placing
   let { x0, x1, y0, y1 } = getTownBounds(m);
 
   if (isHumanPlacing && placementAnchors) {
     for (const k of placementAnchors) {
       const [ax, ay] = parseKey(k);
-      // footprint is 2x2 from anchor
       if (ax < x0) x0 = ax;
       if (ax + 1 > x1) x1 = ax + 1;
       if (ay < y0) y0 = ay;
@@ -231,7 +234,6 @@ function renderTown(playerIdx) {
     }
   }
 
-  // Add 1 cell of padding
   x0 -= 1; y0 -= 1; x1 += 1; y1 += 1;
   const cols = x1 - x0 + 1;
   const rows = y1 - y0 + 1;
@@ -240,20 +242,16 @@ function renderTown(playerIdx) {
   el.style.gridTemplateColumns = `repeat(${cols}, var(--cell-size))`;
   el.style.gridTemplateRows = `repeat(${rows}, var(--cell-size))`;
 
-  // Ghost cells for placement preview
   const ghostCells = new Map();
   if (isHumanPlacing && ghostAnchor) {
     const [gx, gy] = ghostAnchor;
     const cardId = state.phase === Phase.PLACE_FREE ? state.free[0][0] : state.drafted;
     const card = CARDS[cardId];
-    for (let i = 0; i < 2; i++) {
-      for (let j = 0; j < 2; j++) {
+    for (let i = 0; i < 2; i++)
+      for (let j = 0; j < 2; j++)
         ghostCells.set(cellKey(gx + i, gy + j), tileAt(card, i, j, rot180));
-      }
-    }
   }
 
-  // Render cells top-to-bottom (high y first)
   for (let y = y1; y >= y0; y--) {
     for (let x = x0; x <= x1; x++) {
       const k = cellKey(x, y);
@@ -269,57 +267,33 @@ function renderTown(playerIdx) {
       } else {
         const cell = document.createElement('div');
         cell.className = 'cell empty-cell';
-
-        // Highlight valid anchor positions
         if (isHumanPlacing && placementAnchors && placementAnchors.has(k)) {
           cell.classList.add('anchor-highlight');
           cell.addEventListener('click', () => handlePlacement(x, y));
-          cell.addEventListener('mouseenter', () => {
-            ghostAnchor = [x, y];
-            renderTown(0);
-          });
-          cell.addEventListener('mouseleave', () => {
-            ghostAnchor = null;
-            renderTown(0);
-          });
+          cell.addEventListener('mouseenter', () => { ghostAnchor = [x, y]; renderTown(0); });
+          cell.addEventListener('mouseleave', () => { ghostAnchor = null; renderTown(0); });
         }
-
         el.appendChild(cell);
       }
     }
   }
 
-  // Also make occupied cells clickable if they're anchor positions
+  // Make occupied cells clickable for overlapping placements
   if (isHumanPlacing && placementAnchors) {
-    // For overlapping placements, occupied cells that are within an anchor's footprint
-    // need to be clickable too. We handle this by checking each anchor.
-    // Already done through the anchor set — anchors are bottom-left of 2x2.
-    // We need to let user click anywhere in the footprint to place.
-    // Let's add click handlers to ALL cells in the grid that belong to an anchor footprint.
     const allCells = el.children;
     let cellIdx = 0;
     for (let y = y1; y >= y0; y--) {
       for (let x = x0; x <= x1; x++) {
-        const cell = allCells[cellIdx];
-        cellIdx++;
-        if (cell.classList.contains('anchor-highlight')) continue;
-        if (cell.classList.contains('ghost')) continue;
-
-        // Check if this cell is part of any anchor's footprint
+        const cell = allCells[cellIdx++];
+        if (cell.classList.contains('anchor-highlight') || cell.classList.contains('ghost')) continue;
         for (const [dx, dy] of [[0,0],[-1,0],[0,-1],[-1,-1]]) {
           const anchorKey = cellKey(x + dx, y + dy);
-          if (placementAnchors && placementAnchors.has(anchorKey)) {
+          if (placementAnchors.has(anchorKey)) {
             cell.style.cursor = 'pointer';
             const ax = x + dx, ay = y + dy;
             cell.addEventListener('click', () => handlePlacement(ax, ay));
-            cell.addEventListener('mouseenter', () => {
-              ghostAnchor = [ax, ay];
-              renderTown(0);
-            });
-            cell.addEventListener('mouseleave', () => {
-              ghostAnchor = null;
-              renderTown(0);
-            });
+            cell.addEventListener('mouseenter', () => { ghostAnchor = [ax, ay]; renderTown(0); });
+            cell.addEventListener('mouseleave', () => { ghostAnchor = null; renderTown(0); });
             break;
           }
         }
@@ -342,13 +316,11 @@ function renderScores() {
     el.innerHTML = '';
     const total = idx === 0 ? s1 : s2;
 
-    // Terrain
     const terrRow = document.createElement('div');
     terrRow.className = 'score-row';
     terrRow.innerHTML = `<span class="score-label">Terrain</span><span class="score-val">${breakdown.terrain}</span>`;
     el.appendChild(terrRow);
 
-    // Bonuses
     for (const name of state.bonusNames) {
       if (!name) continue;
       const val = breakdown[name] || 0;
@@ -358,7 +330,6 @@ function renderScores() {
       el.appendChild(row);
     }
 
-    // Total
     const totalRow = document.createElement('div');
     totalRow.className = 'score-row total';
     totalRow.innerHTML = `<span class="score-label">Total</span><span class="score-val">${total}</span>`;
@@ -392,10 +363,6 @@ function log(msg, player = null) {
   logContent.scrollTop = logContent.scrollHeight;
 }
 
-// ============================================================================
-// Status
-// ============================================================================
-
 function setStatus(html) {
   statusBar.innerHTML = html;
 }
@@ -407,15 +374,14 @@ function setStatus(html) {
 function computePlacementAnchors() {
   if (!state || state.player !== 0) { placementAnchors = null; return; }
   if (state.phase !== Phase.PLACE_FREE && state.phase !== Phase.PLACE_DRAFT) {
-    placementAnchors = null;
-    return;
+    placementAnchors = null; return;
   }
-  const m = state.towns[0];
-  placementAnchors = candidateAnchors(m);
+  placementAnchors = candidateAnchors(state.towns[0]);
 }
 
 function showPlacementUI() {
   const cardId = state.phase === Phase.PLACE_FREE ? state.free[0][0] : state.drafted;
+  placementPanel.style.display = '';
   placementPanel.classList.remove('hidden');
   placementTitle.textContent = `Place Card #${cardId}`;
   renderCardPreview(cardId, rot180);
@@ -434,7 +400,6 @@ function handlePlacement(ax, ay) {
   const action = [ax, ay, rot180];
   const cardId = state.phase === Phase.PLACE_FREE ? state.free[0][0] : state.drafted;
   log(`You place card #${cardId} at (${ax},${ay})${rot180 ? ' rotated' : ''}`, 0);
-
   hidePlacementUI();
   state = applyAction(state, action);
   rot180 = false;
@@ -448,6 +413,7 @@ function handlePlacement(ax, ay) {
 function selectDraft(offset) {
   if (busy || state.player !== 0 || state.phase !== Phase.DRAFT) return;
   selectedDraftOffset = offset;
+  draftControls.style.display = '';
   draftControls.classList.remove('hidden');
   renderCircle();
 }
@@ -456,12 +422,9 @@ function confirmDraft() {
   if (selectedDraftOffset === null) return;
   const offset = selectedDraftOffset;
   const cardId = state.circle[offset];
-  const skipped = offset;
-
   let msg = `You draft card #${cardId}`;
-  if (skipped > 0) msg += ` (skipping ${skipped} card${skipped > 1 ? 's' : ''} to AI)`;
+  if (offset > 0) msg += ` (skipping ${offset} card${offset > 1 ? 's' : ''} to AI)`;
   log(msg, 0);
-
   draftControls.classList.add('hidden');
   selectedDraftOffset = null;
   state = applyAction(state, { type: 'draft', offset });
@@ -482,22 +445,18 @@ async function aiTurn() {
   busy = true;
   setStatus('AI is thinking...');
   renderAll();
-
-  // Small delay so the UI updates before blocking computation
   await delay(100);
 
   while (!state.isTerminal() && state.player === 1) {
     const action = aiType === 'lookahead'
       ? pickActionLookahead(state, state.bonusNames)
       : pickActionGreedy(state, state.bonusNames);
-
     if (action === null) break;
 
     if (action.type === 'draft') {
       const cardId = state.circle[action.offset];
-      const skipped = action.offset;
       let msg = `AI drafts card #${cardId}`;
-      if (skipped > 0) msg += ` (skipping ${skipped})`;
+      if (action.offset > 0) msg += ` (skipping ${action.offset})`;
       log(msg, 1);
     } else {
       const [ax, ay, r] = action;
@@ -520,14 +479,9 @@ async function aiTurn() {
 
 function afterAction() {
   renderAll();
-
-  if (state.isTerminal()) {
-    showEndModal();
-    return;
-  }
+  if (state.isTerminal()) { showEndModal(); return; }
 
   if (state.player === 0) {
-    // Human turn
     if (state.phase === Phase.DRAFT) {
       setStatus('Your turn: <b>Draft</b> a card from the circle.');
     } else {
@@ -535,7 +489,6 @@ function afterAction() {
       renderTown(0);
     }
   } else {
-    // AI turn
     aiTurn();
   }
 }
@@ -553,17 +506,13 @@ function renderAll() {
 
 function showEndModal() {
   const [s1, s2] = computeScores(state.towns[0], state.towns[1], state.bonusNames);
-  let resultText;
-  if (s1 > s2) {
-    resultText = `<div class="winner">You win!</div>`;
-  } else if (s2 > s1) {
-    resultText = `<div class="winner">AI wins!</div>`;
-  } else {
-    resultText = `<div class="winner">It's a tie!</div>`;
-  }
-
-  endScores.innerHTML = `${resultText}<br>You: <b>${s1}</b> &nbsp; AI: <b>${s2}</b>`;
+  let result;
+  if (s1 > s2) result = '<div class="winner">You win!</div>';
+  else if (s2 > s1) result = '<div class="winner">AI wins!</div>';
+  else result = '<div class="winner">It\'s a tie!</div>';
+  endScores.innerHTML = `${result}<br>You: <b>${s1}</b> &nbsp; AI: <b>${s2}</b>`;
   endModal.classList.remove('hidden');
+  endModal.style.display = '';
   setStatus('Game over!');
   log(`Game over. You: ${s1}, AI: ${s2}. ${s1 > s2 ? 'You win!' : s2 > s1 ? 'AI wins!' : 'Tie!'}`, null);
 }
@@ -606,10 +555,16 @@ draftConfirmBtn.addEventListener('click', confirmDraft);
 draftCancelBtn.addEventListener('click', cancelDraft);
 
 rulesToggleBtn.addEventListener('click', () => {
-  rulesPanel.classList.toggle('hidden');
+  const isHidden = rulesPanel.style.display === 'none' || rulesPanel.classList.contains('hidden');
+  if (isHidden) {
+    rulesPanel.classList.remove('hidden');
+    rulesPanel.style.display = 'block';
+  } else {
+    rulesPanel.style.display = 'none';
+  }
 });
 rulesCloseBtn.addEventListener('click', () => {
-  rulesPanel.classList.add('hidden');
+  rulesPanel.style.display = 'none';
 });
 
 rotateBtn.addEventListener('click', () => {
@@ -620,13 +575,11 @@ rotateBtn.addEventListener('click', () => {
 });
 
 document.addEventListener('keydown', (e) => {
-  if (e.key === 'r' || e.key === 'R') {
-    if (!placementPanel.classList.contains('hidden')) {
-      rot180 = !rot180;
-      const cardId = state.phase === Phase.PLACE_FREE ? state.free[0][0] : state.drafted;
-      renderCardPreview(cardId, rot180);
-      if (ghostAnchor) renderTown(0);
-    }
+  if ((e.key === 'r' || e.key === 'R') && !placementPanel.classList.contains('hidden')) {
+    rot180 = !rot180;
+    const cardId = state.phase === Phase.PLACE_FREE ? state.free[0][0] : state.drafted;
+    renderCardPreview(cardId, rot180);
+    if (ghostAnchor) renderTown(0);
   }
 });
 
