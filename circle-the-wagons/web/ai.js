@@ -93,8 +93,9 @@ export function pickActionLookahead(state, bonusNames) {
     return pickActionGreedy(state, bonusNames);
   }
 
-  // Auto draft depth: 2-ply when <=8 cards, 1-ply otherwise
-  const draftDepth = state.circle.length <= 8 ? 2 : 1;
+  // Auto draft depth: deeper when fewer cards remain
+  const n = state.circle.length;
+  const draftDepth = n <= 6 ? 3 : n <= 8 ? 2 : 1;
 
   const sign = state.player === 0 ? 1 : -1;
   let bestVal = -Infinity;

@@ -564,22 +564,44 @@ ALL_BONUS_NAMES = sorted(set(LOCAL_BONUSES) | set(INTERACTIVE_BONUSES))
 # Final scoring
 # ============================================================================
 
+def resolve_bonus_fns(
+    bonus_names: Tuple[str, str, str],
+) -> Tuple[list, list]:
+    """Resolve bonus names to function lists once per deal.
+    Returns (local_fns, interactive_fns)."""
+    local_fns = []
+    interactive_fns = []
+    for name in bonus_names:
+        if name in LOCAL_BONUSES:
+            local_fns.append(LOCAL_BONUSES[name])
+        elif name in INTERACTIVE_BONUSES:
+            interactive_fns.append(INTERACTIVE_BONUSES[name])
+    return local_fns, interactive_fns
+
+# Cache for resolved bonus functions (keyed by bonus_names tuple)
+_bonus_fn_cache: Dict[tuple, Tuple[list, list]] = {}
+
+def _get_bonus_fns(bonus_names: Tuple[str, str, str]) -> Tuple[list, list]:
+    key = bonus_names
+    if key not in _bonus_fn_cache:
+        _bonus_fn_cache[key] = resolve_bonus_fns(bonus_names)
+    return _bonus_fn_cache[key]
+
+
 def compute_scores(
     m1: TownMap, m2: TownMap, bonus_names: Tuple[str, str, str]
 ) -> Tuple[int, int]:
     """Return (P1 total score, P2 total score)."""
     s1 = terrain_score(m1)
     s2 = terrain_score(m2)
-    for name in bonus_names:
-        if name in LOCAL_BONUSES:
-            fn = LOCAL_BONUSES[name]
-            s1 += fn(m1)
-            s2 += fn(m2)
-        elif name in INTERACTIVE_BONUSES:
-            fn = INTERACTIVE_BONUSES[name]
-            d1, d2 = fn(m1, m2)
-            s1 += d1
-            s2 += d2
+    local_fns, interactive_fns = _get_bonus_fns(bonus_names)
+    for fn in local_fns:
+        s1 += fn(m1)
+        s2 += fn(m2)
+    for fn in interactive_fns:
+        d1, d2 = fn(m1, m2)
+        s1 += d1
+        s2 += d2
     return (s1, s2)
 
 
@@ -617,22 +639,6 @@ def candidate_anchors(m: TownMap) -> Set[Cell]:
             cand.add((x + dx, y + dy))
     return cand
 
-
-def is_legal_placement(m: TownMap, ax: int, ay: int) -> bool:
-    """Check if placing a 2x2 card anchored at (ax,ay) is legal."""
-    if not m:
-        return True
-    # Check if any footprint cell is occupied (overlap)
-    if (ax, ay) in m or (ax+1, ay) in m or (ax, ay+1) in m or (ax+1, ay+1) in m:
-        return True
-    # Edge adjacency: check if any footprint cell has an occupied N4 neighbor
-    # that is NOT part of the footprint
-    fp = {(ax, ay), (ax+1, ay), (ax, ay+1), (ax+1, ay+1)}
-    for x, y in fp:
-        for nx, ny in ((x+1,y),(x-1,y),(x,y+1),(x,y-1)):
-            if (nx, ny) not in fp and (nx, ny) in m:
-                return True
-    return False
 
 
 def place_card(m: TownMap, card: Card, ax: int, ay: int, rot180: bool) -> TownMap:
@@ -999,7 +1005,7 @@ class MCTSNode:
 
     def is_fully_expanded(self) -> bool:
         if self.untried_actions is None:
-            self.untried_actions = get_actions(self.state)
+            return False  # not yet initialized by MCTSSolver._init_actions
         if not self.untried_actions:
             return True
         # Progressive widening: limit children to ~sqrt(visits)
@@ -1032,7 +1038,7 @@ class MCTSNode:
 
 class MCTSSolver:
     """MCTS solver with UCT.
-    Uses heuristic leaf evaluation by default, with optional random rollouts.
+    Uses greedy rollouts by default for higher-quality value estimates.
     Falls back to alpha-beta for endgame positions."""
 
     def __init__(
@@ -1041,14 +1047,37 @@ class MCTSSolver:
         time_limit: float = 2.0,
         endgame_cards: int = 5,
         rollout_rng: Optional[random_module.Random] = None,
-        use_rollouts: bool = False,
+        rollout_policy: str = "greedy",  # "greedy", "random", or "none" (leaf eval)
     ):
         self.bonus_names = bonus_names
         self.time_limit = time_limit
         self.endgame_cards = endgame_cards
         self.rng = rollout_rng or random_module.Random()
         self.rollouts = 0
-        self.use_rollouts = use_rollouts
+        self.rollout_policy = rollout_policy
+
+    def _init_actions(self, node: MCTSNode) -> None:
+        """Initialize and heuristic-sort untried actions for a node."""
+        actions = get_actions(node.state)
+        state = node.state
+        if actions and isinstance(actions[0], DraftAction):
+            # Draft actions: already in offset order (low=skip nothing).
+            # Prefer low offsets (give fewer free cards to opponent).
+            pass  # keep natural order: offset 0, 1, 2, ...
+        elif actions and len(actions) > 1:
+            # Placement actions: sort by overlap count (more overlap = more compact)
+            p = state.player
+            occupied = set(state.towns[p].keys())
+            if occupied:
+                def place_key(act):
+                    ax, ay, rot = act
+                    overlap = 0
+                    for cx, cy in ((ax, ay), (ax+1, ay), (ax, ay+1), (ax+1, ay+1)):
+                        if (cx, cy) in occupied:
+                            overlap += 1
+                    return -overlap
+                actions.sort(key=place_key)
+        node.untried_actions = actions
 
     def solve(self, state: GameState) -> Tuple[int, Optional[object]]:
         """Run MCTS. Returns (estimated value, best action)."""
@@ -1063,6 +1092,7 @@ class MCTSSolver:
             return ab.solve(state)
 
         root = MCTSNode(state)
+        self._init_actions(root)
         self.rollouts = 0
         deadline = time.time() + self.time_limit
 
@@ -1070,8 +1100,10 @@ class MCTSSolver:
             node = self._select(root)
             if not node.state.is_terminal():
                 node = self._expand(node)
-            if self.use_rollouts:
-                value = self._rollout(node.state)
+            if self.rollout_policy == "greedy":
+                value = self._greedy_rollout(node.state)
+            elif self.rollout_policy == "random":
+                value = self._random_rollout(node.state)
             else:
                 value = float(utility(
                     node.state.towns[0], node.state.towns[1], self.bonus_names))
@@ -1087,6 +1119,8 @@ class MCTSSolver:
 
     def _select(self, node: MCTSNode) -> MCTSNode:
         while not node.state.is_terminal():
+            if node.untried_actions is None:
+                self._init_actions(node)
             if not node.is_fully_expanded():
                 return node
             node = node.best_child()
@@ -1094,20 +1128,18 @@ class MCTSSolver:
 
     def _expand(self, node: MCTSNode) -> MCTSNode:
         if node.untried_actions is None:
-            node.untried_actions = get_actions(node.state)
+            self._init_actions(node)
         if not node.untried_actions:
             return node
-        action = node.untried_actions.pop()
+        action = node.untried_actions.pop(0)  # pop from front (best heuristic first)
         child_state = apply_action(node.state, action)
         child = MCTSNode(child_state, action=action, parent=node)
         node.children.append(child)
         return child
 
-    def _rollout(self, state: GameState) -> float:
-        """Fast random playout to terminal state.
-        Inlines state transitions and samples placements without full
-        enumeration, avoiding apply_action copy overhead and candidate_anchors."""
-        # Destructure into locals for speed
+    def _greedy_rollout(self, state: GameState) -> float:
+        """Greedy rollout: use greedy placements, weighted-random drafts.
+        Much higher quality than random rollouts while still fast enough."""
         circle = list(state.circle)
         towns_0 = dict(state.towns[0])
         towns_1 = dict(state.towns[1])
@@ -1119,20 +1151,68 @@ class MCTSSolver:
         bonus_names = state.bonus_names
         rng = self.rng
 
-        PH_FREE = 0       # Phase.PLACE_FREE
-        PH_DRAFT = 1      # Phase.DRAFT
-        PH_PLACE = 2      # Phase.PLACE_DRAFT
+        PH_FREE = 0
+        PH_DRAFT = 1
+        PH_PLACE = 2
 
         free = [free_0, free_1]
         towns = [towns_0, towns_1]
 
-        # Initial normalize
         if phase == PH_FREE and not free[player]:
             if circle:
                 phase = PH_DRAFT
 
+        def _greedy_place(m, card_id):
+            """Pick the placement using a fast heuristic.
+            Uses overlap + terrain matching rather than full terrain_score
+            to keep rollouts fast while being much better than random."""
+            card = CARDS[card_id]
+            quads = card.quads
+            if not m:
+                m[(0, 0)] = quads[0]; m[(1, 0)] = quads[1]
+                m[(0, 1)] = quads[2]; m[(1, 1)] = quads[3]
+                return
+            # Fast heuristic: overlap cells matching terrain = +2,
+            # overlap any = +1, adjacent (no overlap) = 0.
+            # This favors compact towns and terrain grouping.
+            anchors = candidate_anchors(m)
+            best_val = -999999
+            best_ax = best_ay = 0
+            best_rot = False
+            for ax, ay in anchors:
+                for rot_idx in (0, 1):
+                    if rot_idx:
+                        q = (quads[3], quads[2], quads[1], quads[0])
+                    else:
+                        q = quads
+                    val = 0
+                    for idx, (cx, cy) in enumerate((
+                        (ax, ay), (ax+1, ay), (ax, ay+1), (ax+1, ay+1)
+                    )):
+                        existing = m.get((cx, cy))
+                        if existing is not None:
+                            val += 1  # overlap
+                            if existing[0] == q[idx][0]:
+                                val += 2  # terrain match bonus
+                        else:
+                            # Check N4 adjacency for terrain grouping
+                            new_terr = q[idx][0]
+                            for nx, ny in ((cx+1,cy),(cx-1,cy),(cx,cy+1),(cx,cy-1)):
+                                nb = m.get((nx, ny))
+                                if nb is not None and nb[0] == new_terr:
+                                    val += 1
+                                    break
+                    if val > best_val:
+                        best_val = val
+                        best_ax, best_ay, best_rot = ax, ay, bool(rot_idx)
+            if best_rot:
+                m[(best_ax, best_ay)] = quads[3]; m[(best_ax+1, best_ay)] = quads[2]
+                m[(best_ax, best_ay+1)] = quads[1]; m[(best_ax+1, best_ay+1)] = quads[0]
+            else:
+                m[(best_ax, best_ay)] = quads[0]; m[(best_ax+1, best_ay)] = quads[1]
+                m[(best_ax, best_ay+1)] = quads[2]; m[(best_ax+1, best_ay+1)] = quads[3]
+
         for _ in range(200):
-            # Terminal check
             if not circle and not free_0 and not free_1 and drafted == -1:
                 break
 
@@ -1141,10 +1221,83 @@ class MCTSSolver:
 
             if phase == PH_FREE:
                 if not free[p]:
-                    break  # terminal (shouldn't reach here after normalize)
+                    break
+                card_id = free[p].pop(0)
+                _greedy_place(m, card_id)
+                if not free[p]:
+                    if circle:
+                        phase = PH_DRAFT
+
+            elif phase == PH_DRAFT:
+                n = len(circle)
+                # Weighted random: bias toward low offsets (skip fewer cards)
+                # Weight = 1/(offset+1), so offset 0 is most likely
+                weights = [1.0 / (i + 1) for i in range(n)]
+                total_w = sum(weights)
+                r = rng.random() * total_w
+                offset = 0
+                acc = 0.0
+                for i, w in enumerate(weights):
+                    acc += w
+                    if r <= acc:
+                        offset = i
+                        break
+                chosen = circle[offset]
+                if offset > 0:
+                    free[1 - p].extend(circle[:offset])
+                del circle[:offset + 1]
+                drafted = chosen
+                phase = PH_PLACE
+
+            elif phase == PH_PLACE:
+                _greedy_place(m, drafted)
+                drafted = -1
+                player = 1 - p
+                phase = PH_FREE
+                if not free[player]:
+                    if circle:
+                        phase = PH_DRAFT
+
+        return float(utility(towns_0, towns_1, bonus_names))
+
+    def _random_rollout(self, state: GameState) -> float:
+        """Fast random playout to terminal state.
+        Inlines state transitions and samples placements without full
+        enumeration, avoiding apply_action copy overhead and candidate_anchors."""
+        circle = list(state.circle)
+        towns_0 = dict(state.towns[0])
+        towns_1 = dict(state.towns[1])
+        free_0 = list(state.free[0])
+        free_1 = list(state.free[1])
+        player = state.player
+        phase = int(state.phase)
+        drafted = state.drafted
+        bonus_names = state.bonus_names
+        rng = self.rng
+
+        PH_FREE = 0
+        PH_DRAFT = 1
+        PH_PLACE = 2
+
+        free = [free_0, free_1]
+        towns = [towns_0, towns_1]
+
+        if phase == PH_FREE and not free[player]:
+            if circle:
+                phase = PH_DRAFT
+
+        for _ in range(200):
+            if not circle and not free_0 and not free_1 and drafted == -1:
+                break
+
+            p = player
+            m = towns[p]
+
+            if phase == PH_FREE:
+                if not free[p]:
+                    break
                 card_id = free[p].pop(0)
                 quads = CARDS[card_id].quads
-                # Sample random placement (overlap or edge-adjacent)
                 if not m:
                     ax, ay = 0, 0
                 else:
@@ -1152,13 +1305,12 @@ class MCTSSolver:
                     x, y = keys[rng.randrange(len(keys))]
                     dx, dy = _ANCHOR_OFFSETS[rng.randrange(12)]
                     ax, ay = x + dx, y + dy
-                if rng.randrange(2):  # rot180
+                if rng.randrange(2):
                     m[(ax, ay)] = quads[3]; m[(ax+1, ay)] = quads[2]
                     m[(ax, ay+1)] = quads[1]; m[(ax+1, ay+1)] = quads[0]
                 else:
                     m[(ax, ay)] = quads[0]; m[(ax+1, ay)] = quads[1]
                     m[(ax, ay+1)] = quads[2]; m[(ax+1, ay+1)] = quads[3]
-                # Normalize
                 if not free[p]:
                     if circle:
                         phase = PH_DRAFT
@@ -1182,7 +1334,7 @@ class MCTSSolver:
                     x, y = keys[rng.randrange(len(keys))]
                     dx, dy = _ANCHOR_OFFSETS[rng.randrange(12)]
                     ax, ay = x + dx, y + dy
-                if rng.randrange(2):  # rot180
+                if rng.randrange(2):
                     m[(ax, ay)] = quads[3]; m[(ax+1, ay)] = quads[2]
                     m[(ax, ay+1)] = quads[1]; m[(ax+1, ay+1)] = quads[0]
                 else:
@@ -1191,7 +1343,6 @@ class MCTSSolver:
                 drafted = -1
                 player = 1 - p
                 phase = PH_FREE
-                # Normalize
                 if not free[player]:
                     if circle:
                         phase = PH_DRAFT
@@ -1265,9 +1416,15 @@ def pick_action_lookahead(
         return pick_action_greedy(state, bonus_names)
 
     # Auto-select draft depth: deeper when fewer cards remain
+    # Depth 3: ~1-3s at ≤6 cards, depth 2: ~1-3s at ≤8 cards
     if draft_depth < 0:
         n_circle = len(state.circle)
-        draft_depth = 2 if n_circle <= 8 else 1
+        if n_circle <= 6:
+            draft_depth = 3
+        elif n_circle <= 8:
+            draft_depth = 2
+        else:
+            draft_depth = 1
 
     sign = 1 if state.player == 0 else -1
     best_val = None
@@ -1337,9 +1494,13 @@ def pick_action_mcts(
     bonus_names: Tuple[str, str, str],
     time_limit: float = 0.5,
     rng: Optional[random_module.Random] = None,
+    rollout_policy: str = "greedy",
 ) -> object:
     """MCTS agent."""
-    solver = MCTSSolver(bonus_names, time_limit=time_limit, rollout_rng=rng)
+    solver = MCTSSolver(
+        bonus_names, time_limit=time_limit,
+        rollout_rng=rng, rollout_policy=rollout_policy,
+    )
     _, action = solver.solve(state)
     return action
 
@@ -1540,6 +1701,9 @@ def cmd_benchmark(n_games: int, time_limit: float, seed: int) -> None:
         "greedy_v_rand": [],
         "look_v_rand": [],
         "look_v_greedy": [],
+        "mcts_v_rand": [],
+        "mcts_v_greedy": [],
+        "mcts_v_look": [],
     }
 
     for i in range(n_games):
@@ -1578,13 +1742,41 @@ def cmd_benchmark(n_games: int, time_limit: float, seed: int) -> None:
         )
         results["look_v_greedy"].append(u_lg)
 
+        # MCTS vs Random
+        _, _, u_mr = play_game(
+            circle, bonus_names, start_index=0,
+            agent_p1="mcts", agent_p2="random",
+            time_limit=time_limit,
+            rng=random_module.Random(game_seed + 40000),
+        )
+        results["mcts_v_rand"].append(u_mr)
+
+        # MCTS vs Greedy
+        _, _, u_mg = play_game(
+            circle, bonus_names, start_index=0,
+            agent_p1="mcts", agent_p2="greedy",
+            time_limit=time_limit,
+            rng=random_module.Random(game_seed + 50000),
+        )
+        results["mcts_v_greedy"].append(u_mg)
+
+        # MCTS vs Lookahead
+        _, _, u_ml = play_game(
+            circle, bonus_names, start_index=0,
+            agent_p1="mcts", agent_p2="lookahead",
+            time_limit=time_limit,
+            rng=random_module.Random(game_seed + 60000),
+        )
+        results["mcts_v_look"].append(u_ml)
+
         def avg(vals):
             return sum(vals) / len(vals) if vals else 0
 
         print(f"  Game {i+1:3d}/{n_games}: "
-              f"LvR={u_lr:+d} LvG={u_lg:+d}  "
-              f"(avg LvR={avg(results['look_v_rand']):+.1f} "
-              f"LvG={avg(results['look_v_greedy']):+.1f})")
+              f"LvG={u_lg:+d} MvG={u_mg:+d} MvL={u_ml:+d}  "
+              f"(avg LvG={avg(results['look_v_greedy']):+.1f} "
+              f"MvG={avg(results['mcts_v_greedy']):+.1f} "
+              f"MvL={avg(results['mcts_v_look']):+.1f})")
 
     print()
     print("=== Results ===")
@@ -1594,6 +1786,9 @@ def cmd_benchmark(n_games: int, time_limit: float, seed: int) -> None:
         ("Greedy vs Random", "greedy_v_rand"),
         ("Lookahead vs Random", "look_v_rand"),
         ("Lookahead vs Greedy", "look_v_greedy"),
+        ("MCTS vs Random", "mcts_v_rand"),
+        ("MCTS vs Greedy", "mcts_v_greedy"),
+        ("MCTS vs Lookahead", "mcts_v_look"),
     ]:
         vals = results[key]
         avg_v = sum(vals) / len(vals)

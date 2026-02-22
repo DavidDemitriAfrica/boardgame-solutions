@@ -14,9 +14,10 @@ A two-player micro card game by Steven Aramini, Danny Devine, and Paul Shortino 
 
 **Solver** (`circle-the-wagons/solver.py`):
 - Complete game engine with all 18 territory cards and 18 bonus scoring rules
-- Four agents: Random, Greedy (1-ply), Lookahead (draft-aware greedy), MCTS
+- Four agents: Random, Greedy (1-ply), Lookahead (draft minimax + greedy placements), MCTS
 - Alpha-beta endgame solver with transposition table
-- Lookahead beats Greedy 64% (32-15-3 over 50 games), both crush Random
+- Lookahead beats Greedy 68% (34-14-2 over 50 games, avg +5.9), both crush Random
+- Draft minimax with alpha-beta pruning: 3-ply at ≤6 cards, 2-ply at ≤8, 1-ply otherwise
 
 **Web demo** (`circle-the-wagons/web/`):
 - Vanilla JS/HTML/CSS, runs entirely client-side
