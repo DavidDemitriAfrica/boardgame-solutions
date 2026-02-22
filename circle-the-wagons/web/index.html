@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Circle the Wagons</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header>
+    <h1>Circle the Wagons</h1>
+    <div class="controls">
+      <label>Seed: <input type="number" id="seed-input" value="42" min="1" max="99999"></label>
+      <label>AI:
+        <select id="ai-select">
+          <option value="lookahead" selected>Lookahead</option>
+          <option value="greedy">Greedy</option>
+        </select>
+      </label>
+      <button id="new-game-btn">New Game</button>
+    </div>
+  </header>
+
+  <div id="status-bar">Click <b>New Game</b> to start.</div>
+
+  <div id="bonus-display">
+    <div class="bonus-card" id="bonus-0"></div>
+    <div class="bonus-card" id="bonus-1"></div>
+    <div class="bonus-card" id="bonus-2"></div>
+  </div>
+
+  <div id="circle-area">
+    <h2>Card Circle <span id="circle-count"></span></h2>
+    <div id="circle-container"></div>
+    <div id="draft-controls" class="hidden">
+      <button id="draft-confirm-btn">Confirm Draft</button>
+      <button id="draft-cancel-btn">Cancel</button>
+    </div>
+  </div>
+
+  <div id="towns-row">
+    <div class="town-panel">
+      <h2>Your Town (P1)</h2>
+      <div id="town-0" class="town-grid"></div>
+    </div>
+    <div id="placement-panel" class="hidden">
+      <h2 id="placement-title">Place Card</h2>
+      <div id="card-preview"></div>
+      <button id="rotate-btn" title="Rotate 180° (R)">Rotate</button>
+    </div>
+    <div class="town-panel">
+      <h2>AI Town (P2)</h2>
+      <div id="town-1" class="town-grid"></div>
+    </div>
+  </div>
+
+  <div id="score-panel">
+    <div class="score-col">
+      <h3>You (P1)</h3>
+      <div id="score-0"></div>
+    </div>
+    <div class="score-col">
+      <h3>AI (P2)</h3>
+      <div id="score-1"></div>
+    </div>
+  </div>
+
+  <div id="game-log">
+    <h3>Game Log</h3>
+    <div id="log-content"></div>
+  </div>
+
+  <div id="end-modal" class="hidden">
+    <div class="modal-content">
+      <h2 id="end-title">Game Over</h2>
+      <div id="end-scores"></div>
+      <button id="end-close-btn">Play Again</button>
+    </div>
+  </div>
+
+  <script type="module" src="ui.js"></script>
+</body>
+</html>
