@@ -88,6 +88,11 @@ button:disabled { opacity: 0.4; cursor: not-allowed; }
   background: var(--accent2);
 }
 
+.hint-thinking {
+  opacity: 0.6;
+  cursor: wait;
+}
+
 #status-bar {
   text-align: center;
   padding: 0.6rem;

@@ -653,11 +653,13 @@ function startGame() {
 // ============================================================================
 
 const undoBtn = $('undo-btn');
+const hintBtn = $('hint-btn');
 newGameBtn.addEventListener('click', startGame);
 endCloseBtn.addEventListener('click', startGame);
 draftConfirmBtn.addEventListener('click', confirmDraft);
 draftCancelBtn.addEventListener('click', cancelDraft);
 undoBtn.addEventListener('click', undoAction);
+hintBtn.addEventListener('click', showHint);
 
 rulesToggleBtn.addEventListener('click', () => {
   rulesPanel.classList.toggle('hidden');
@@ -697,11 +699,46 @@ document.addEventListener('keydown', (e) => {
     e.preventDefault();
     undoAction();
   }
+  // H for hint
+  if ((e.key === 'h' || e.key === 'H') && !e.ctrlKey && !e.metaKey) {
+    showHint();
+  }
 });
 
 // ============================================================================
 // Helpers
 // ============================================================================
+
+function showHint() {
+  if (busy || !state || state.player !== 0 || state.isTerminal()) return;
+  busy = true;
+  setStatus('Computing hint...');
+
+  // Use setTimeout to let the status render before computation
+  setTimeout(() => {
+    const action = pickActionLookahead(state, state.bonusNames);
+    busy = false;
+    if (!action) { setStatus('No hint available.'); return; }
+
+    if (action.type === 'draft') {
+      // Highlight the suggested card in the circle
+      selectDraft(action.offset);
+      log(`Hint: draft card #${state.circle[action.offset]}${action.offset > 0 ? ` (skip ${action.offset})` : ''}`, null);
+    } else {
+      const [ax, ay, r] = action;
+      // Apply the rotation and show ghost at the suggested position
+      rot180 = r;
+      rotateBtn.classList.toggle('active', rot180);
+      const isFree = state.phase === Phase.PLACE_FREE;
+      const cardId = isFree ? state.free[0][0] : state.drafted;
+      renderCardPreview(cardId, rot180);
+      ghostAnchor = [ax, ay];
+      renderTown(0);
+      log(`Hint: place at (${ax},${ay})${r ? ' rotated' : ''}`, null);
+    }
+    setStatus('Hint shown. Click to accept, or choose a different move.');
+  }, 50);
+}
 
 function undoAction() {
   if (busy || stateHistory.length === 0) return;
