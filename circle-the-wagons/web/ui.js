@@ -20,6 +20,9 @@ const $ = id => document.getElementById(id);
 const seedInput = $('seed-input');
 const aiSelect = $('ai-select');
 const newGameBtn = $('new-game-btn');
+const rulesToggleBtn = $('rules-toggle-btn');
+const rulesPanel = $('rules-panel');
+const rulesCloseBtn = $('rules-close-btn');
 const statusBar = $('status-bar');
 const circleContainer = $('circle-container');
 const circleCount = $('circle-count');
@@ -86,13 +89,66 @@ function renderCardPreview(cardId, r180) {
 function renderCircle() {
   circleContainer.innerHTML = '';
   if (!state) return;
-  circleCount.textContent = `(${state.circle.length} cards)`;
+  const n = state.circle.length;
+  circleCount.textContent = `(${n} cards)`;
+  if (n === 0) {
+    circleContainer.style.width = '0';
+    circleContainer.style.height = '0';
+    return;
+  }
   const isDraftPhase = state.phase === Phase.DRAFT && state.player === 0 && !busy;
 
+  // Card dimensions (read from CSS variable)
+  const cs = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--cell-size'));
+  const cardW = cs * 2 + 6; // 2 cells + border
+  const cardH = cs * 2 + 6;
+
+  // Compute radius so cards don't overlap
+  // Circumference must fit n cards with gaps: 2*pi*r >= n * (cardW + gap)
+  const gap = 12;
+  const minRadius = Math.max(80, (n * (cardW + gap)) / (2 * Math.PI));
+  const radius = minRadius;
+
+  // Container size
+  const containerSize = Math.ceil(2 * radius + cardW + 40);
+  circleContainer.style.width = containerSize + 'px';
+  circleContainer.style.height = containerSize + 'px';
+  const cx = containerSize / 2;
+  const cy = containerSize / 2;
+
+  // Draw connector lines between adjacent cards
+  for (let idx = 0; idx < n; idx++) {
+    const angle1 = (idx / n) * 2 * Math.PI - Math.PI / 2;
+    const angle2 = ((idx + 1) % n / n) * 2 * Math.PI - Math.PI / 2;
+    const x1 = cx + radius * Math.cos(angle1);
+    const y1 = cy + radius * Math.sin(angle1);
+    const x2 = cx + radius * Math.cos(angle2);
+    const y2 = cy + radius * Math.sin(angle2);
+    const dx = x2 - x1, dy = y2 - y1;
+    const len = Math.sqrt(dx * dx + dy * dy);
+    const ang = Math.atan2(dy, dx) * 180 / Math.PI;
+
+    const line = document.createElement('div');
+    line.className = 'circle-connector';
+    line.style.left = x1 + 'px';
+    line.style.top = y1 + 'px';
+    line.style.width = len + 'px';
+    line.style.transform = `rotate(${ang}deg)`;
+    circleContainer.appendChild(line);
+  }
+
+  // Place cards radially
   state.circle.forEach((cid, idx) => {
     const card = CARDS[cid];
+    const angle = (idx / n) * 2 * Math.PI - Math.PI / 2; // start at top
+    const x = cx + radius * Math.cos(angle);
+    const y = cy + radius * Math.sin(angle);
+
     const wrapper = document.createElement('div');
     wrapper.className = 'circle-card';
+    wrapper.style.left = x + 'px';
+    wrapper.style.top = y + 'px';
+    wrapper.style.transform = 'translate(-50%, -50%)';
     if (isDraftPhase) wrapper.classList.add('clickable');
 
     // Card label
@@ -548,6 +604,13 @@ newGameBtn.addEventListener('click', startGame);
 endCloseBtn.addEventListener('click', startGame);
 draftConfirmBtn.addEventListener('click', confirmDraft);
 draftCancelBtn.addEventListener('click', cancelDraft);
+
+rulesToggleBtn.addEventListener('click', () => {
+  rulesPanel.classList.toggle('hidden');
+});
+rulesCloseBtn.addEventListener('click', () => {
+  rulesPanel.classList.add('hidden');
+});
 
 rotateBtn.addEventListener('click', () => {
   rot180 = !rot180;

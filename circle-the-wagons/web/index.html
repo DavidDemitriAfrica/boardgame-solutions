@@ -18,8 +18,35 @@
         </select>
       </label>
       <button id="new-game-btn">New Game</button>
+      <button id="rules-toggle-btn" class="rules-btn">Rules</button>
     </div>
   </header>
+
+  <div id="rules-panel" class="hidden">
+    <div class="rules-content">
+      <h2>How to Play</h2>
+      <div class="rules-columns">
+        <div class="rules-col">
+          <h3>Overview</h3>
+          <p>Circle the Wagons is a two-player card drafting and town-building game. 15 territory cards are arranged in a circle. Players take turns drafting cards and placing them to build their frontier town. Three bonus scoring cards add unique objectives each game.</p>
+          <h3>Drafting</h3>
+          <p>On your turn, pick any card from the circle. All cards <em>before</em> your pick (clockwise) are skipped and given to your opponent as free cards. Taking the first available card skips nothing; taking one further around the circle gives your opponent more free cards.</p>
+          <h3>Placement</h3>
+          <p>Place each drafted card (2&times;2 grid) onto your town. The card must overlap or be edge-adjacent to your existing town. Cards placed on top of existing cells <strong>replace</strong> them &mdash; this is how you shape your terrain.</p>
+        </div>
+        <div class="rules-col">
+          <h3>Free Cards</h3>
+          <p>Skipped cards go to your opponent's free queue. They must place all free cards before their next draft. Free cards follow the same placement rules.</p>
+          <h3>Scoring</h3>
+          <p><strong>Terrain:</strong> For each of the 6 terrain types, score points equal to your largest connected group of that terrain (4-connected, orthogonal only).</p>
+          <p><strong>Bonuses:</strong> Three bonus cards are active each game. Most give points for icon patterns (e.g. Forts near Guns, Cows away from Snow). Some are interactive and compare both players' towns.</p>
+          <h3>Controls</h3>
+          <p>During drafting, click a card in the circle then confirm. During placement, hover to preview, press <kbd>R</kbd> to rotate 180&deg;, click to place. The card preview shows your current rotation.</p>
+        </div>
+      </div>
+      <button id="rules-close-btn">Got it</button>
+    </div>
+  </div>
 
   <div id="status-bar">Click <b>New Game</b> to start.</div>
 
@@ -46,7 +73,7 @@
     <div id="placement-panel" class="hidden">
       <h2 id="placement-title">Place Card</h2>
       <div id="card-preview"></div>
-      <button id="rotate-btn" title="Rotate 180° (R)">Rotate</button>
+      <button id="rotate-btn" title="Rotate 180&deg; (R)">Rotate</button>
     </div>
     <div class="town-panel">
       <h2>AI Town (P2)</h2>
