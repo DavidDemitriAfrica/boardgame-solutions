@@ -1,22 +1,27 @@
 #!/usr/bin/env python3
 """
-Circle the Wagons -- Game engine and exact solver.
+Circle the Wagons -- Game engine and solver.
 
 Single-file implementation:
   - Full game state representation and transition function
   - All 18 bonus scoring cards (verified from PNP)
-  - Alpha-beta minimax solver with transposition table
+  - MCTS solver for full-game play
+  - Alpha-beta endgame solver with transposition table
   - Player 2 starting-card optimizer
+  - Benchmark and playthrough modes
 
 Usage:
-    python solver.py                   # solve a sample deal
-    python solver.py --verify-cards    # print all 18 cards for visual check
-    python solver.py --time-limit 5    # seconds per starting position
+    python solver.py                       # solve a sample deal
+    python solver.py --verify-cards        # print all 18 cards
+    python solver.py --play --seed 42      # play through a complete game
+    python solver.py --benchmark -n 20     # solver vs random benchmark
+    python solver.py --time-limit 5        # seconds per starting position
 """
 from __future__ import annotations
 
 import argparse
-import copy
+import math
+import random as random_module
 import sys
 import time
 from enum import IntEnum
@@ -761,10 +766,44 @@ def apply_action(state: GameState, action) -> GameState:
 
 
 # ============================================================================
-# Solver: iterative-deepening alpha-beta
+# Solver: alpha-beta with move ordering (used for endgame)
 # ============================================================================
 
-class Solver:
+def _remaining_cards(state: GameState) -> int:
+    """Total cards still to be placed (circle + free queues + drafted)."""
+    n = len(state.circle) + len(state.free[0]) + len(state.free[1])
+    if state.drafted >= 0:
+        n += 1
+    return n
+
+
+def _order_actions(state: GameState, actions: list) -> list:
+    """Cheap move ordering for alpha-beta inner nodes.
+    Draft: prefer low offsets (skip fewer cards).
+    Place: prefer overlapping placements (overlap first, then adjacency)."""
+    if not actions:
+        return actions
+    if isinstance(actions[0], DraftAction):
+        return actions  # already sorted by offset (0, 1, 2, ...)
+
+    # Placement actions: prefer overlap (more compact towns score better)
+    p = state.player
+    occupied = set(state.towns[p].keys())
+    if not occupied:
+        return actions
+
+    def place_key(act):
+        ax, ay, rot = act
+        fp = set(footprint(ax, ay))
+        overlap_count = len(fp & occupied)
+        return -overlap_count  # more overlap = better = sort first
+
+    return sorted(actions, key=place_key)
+
+
+class AlphaBetaSolver:
+    """Alpha-beta solver with move ordering. Best for endgame positions."""
+
     def __init__(
         self,
         bonus_names: Tuple[str, str, str],
@@ -774,19 +813,19 @@ class Solver:
         self.bonus_names = bonus_names
         self.time_limit = time_limit
         self.max_depth = max_depth
-        self.tt: Dict[tuple, Tuple[int, int]] = {}  # key -> (depth, value)
+        self.tt: Dict[tuple, Tuple[int, int]] = {}
         self.nodes = 0
         self.deadline = 0.0
+        self.depth_reached = 0
 
     def heuristic(self, state: GameState) -> int:
-        """Quick evaluation: score as if game ended now."""
         return utility(state.towns[0], state.towns[1], self.bonus_names)
 
     def solve(self, state: GameState) -> Tuple[int, Optional[object]]:
-        """Iterative-deepening alpha-beta. Returns (value, best_action)."""
         self.deadline = time.time() + self.time_limit
         self.tt.clear()
         self.nodes = 0
+        self.depth_reached = 0
 
         best_val = None
         best_act = None
@@ -795,7 +834,7 @@ class Solver:
             try:
                 v, a = self._root_search(state, depth)
                 best_val, best_act = v, a
-                # If we found a terminal value, stop
+                self.depth_reached = depth
                 if state.is_terminal():
                     break
             except TimeoutError:
@@ -811,21 +850,21 @@ class Solver:
         if not actions:
             return self.heuristic(state), None
 
-        p = state.player  # 0=P1 (maximizer), 1=P2 (minimizer)
+        p = state.player
         alpha, beta = -999999, 999999
 
-        # Simple move ordering: sort children by heuristic
+        # Sort by heuristic at root only (expensive but only done once)
         scored = []
         for a in actions:
             child = apply_action(state, a)
-            scored.append((self.heuristic(child), a, child))
+            scored.append((self.heuristic(child), a))
         scored.sort(key=lambda x: x[0], reverse=(p == 0))
 
         best_act = scored[0][1]
         best_val = -999999 if p == 0 else 999999
 
-        for _, a, child in scored:
-            v = self._alphabeta(child, depth - 1, alpha, beta)
+        for _, a in scored:
+            v = self._alphabeta(apply_action(state, a), depth - 1, alpha, beta)
             if p == 0:
                 if v > best_val:
                     best_val, best_act = v, a
@@ -841,7 +880,7 @@ class Solver:
 
     def _alphabeta(self, state: GameState, depth: int, alpha: int, beta: int) -> int:
         self.nodes += 1
-        if self.nodes % 10000 == 0 and time.time() >= self.deadline:
+        if self.nodes % 1000 == 0 and time.time() >= self.deadline:
             raise TimeoutError
 
         state.normalize()
@@ -858,9 +897,9 @@ class Solver:
                 return val
 
         p = state.player
-        actions = get_actions(state)
+        actions = _order_actions(state, get_actions(state))
 
-        if p == 0:  # maximizer
+        if p == 0:
             best = -999999
             for a in actions:
                 v = self._alphabeta(apply_action(state, a), depth - 1, alpha, beta)
@@ -870,7 +909,7 @@ class Solver:
                     alpha = best
                 if alpha >= beta:
                     break
-        else:  # minimizer
+        else:
             best = 999999
             for a in actions:
                 v = self._alphabeta(apply_action(state, a), depth - 1, alpha, beta)
@@ -883,6 +922,221 @@ class Solver:
 
         self.tt[key] = (depth, best)
         return best
+
+
+# ============================================================================
+# Solver: MCTS (Monte Carlo Tree Search)
+# ============================================================================
+
+class MCTSNode:
+    __slots__ = ("state", "action", "parent", "children",
+                 "visits", "total_value", "untried_actions")
+
+    def __init__(self, state: GameState, action=None, parent=None):
+        self.state = state
+        self.action = action  # action that led here from parent
+        self.parent: Optional[MCTSNode] = parent
+        self.children: List[MCTSNode] = []
+        self.visits = 0
+        self.total_value = 0.0
+        self.untried_actions: Optional[list] = None
+
+    def is_fully_expanded(self) -> bool:
+        if self.untried_actions is None:
+            self.untried_actions = get_actions(self.state)
+        return len(self.untried_actions) == 0
+
+    def best_child(self, c: float = 1.41) -> MCTSNode:
+        """UCB1 selection."""
+        log_parent = math.log(self.visits)
+        best_score = -999999.0
+        best = self.children[0]
+        # P1 (player 0) maximizes, P2 (player 1) minimizes
+        sign = 1.0 if self.state.player == 0 else -1.0
+        for child in self.children:
+            exploit = sign * (child.total_value / child.visits)
+            explore = c * math.sqrt(log_parent / child.visits)
+            score = exploit + explore
+            if score > best_score:
+                best_score = score
+                best = child
+        return best
+
+    def most_visited_child(self) -> MCTSNode:
+        best = self.children[0]
+        for child in self.children[1:]:
+            if child.visits > best.visits:
+                best = child
+        return best
+
+
+class MCTSSolver:
+    """MCTS solver with UCT and random rollouts.
+    Falls back to alpha-beta for endgame positions."""
+
+    def __init__(
+        self,
+        bonus_names: Tuple[str, str, str],
+        time_limit: float = 2.0,
+        endgame_cards: int = 5,
+        rollout_rng: Optional[random_module.Random] = None,
+    ):
+        self.bonus_names = bonus_names
+        self.time_limit = time_limit
+        self.endgame_cards = endgame_cards
+        self.rng = rollout_rng or random_module.Random()
+        self.rollouts = 0
+
+    def solve(self, state: GameState) -> Tuple[int, Optional[object]]:
+        """Run MCTS. Returns (estimated value, best action)."""
+        state.normalize()
+        if state.is_terminal():
+            return utility(state.towns[0], state.towns[1], self.bonus_names), None
+
+        # If few enough cards remain, use exact alpha-beta
+        rem = _remaining_cards(state)
+        if rem <= self.endgame_cards:
+            ab = AlphaBetaSolver(self.bonus_names, time_limit=self.time_limit)
+            return ab.solve(state)
+
+        root = MCTSNode(state)
+        self.rollouts = 0
+        deadline = time.time() + self.time_limit
+
+        while time.time() < deadline:
+            node = self._select(root)
+            if not node.state.is_terminal():
+                node = self._expand(node)
+            value = self._rollout(node.state)
+            self._backprop(node, value)
+            self.rollouts += 1
+
+        if not root.children:
+            return utility(state.towns[0], state.towns[1], self.bonus_names), None
+
+        best = root.most_visited_child()
+        avg_value = best.total_value / best.visits if best.visits > 0 else 0
+        return int(round(avg_value)), best.action
+
+    def _select(self, node: MCTSNode) -> MCTSNode:
+        while not node.state.is_terminal():
+            if not node.is_fully_expanded():
+                return node
+            node = node.best_child()
+        return node
+
+    def _expand(self, node: MCTSNode) -> MCTSNode:
+        if node.untried_actions is None:
+            node.untried_actions = get_actions(node.state)
+        if not node.untried_actions:
+            return node
+        action = node.untried_actions.pop()
+        child_state = apply_action(node.state, action)
+        child = MCTSNode(child_state, action=action, parent=node)
+        node.children.append(child)
+        return child
+
+    def _rollout(self, state: GameState) -> float:
+        """Random playout to terminal state."""
+        s = state.copy()
+        depth = 0
+        max_rollout_depth = 200
+        while not s.is_terminal() and depth < max_rollout_depth:
+            actions = get_actions(s)
+            if not actions:
+                break
+            a = self.rng.choice(actions)
+            s = apply_action(s, a)
+            depth += 1
+        return float(utility(s.towns[0], s.towns[1], self.bonus_names))
+
+    def _backprop(self, node: MCTSNode, value: float) -> None:
+        while node is not None:
+            node.visits += 1
+            node.total_value += value
+            node = node.parent
+
+
+# ============================================================================
+# Agent: picks actions using a solver
+# ============================================================================
+
+def pick_action_random(state: GameState, rng: random_module.Random) -> object:
+    """Random agent."""
+    actions = get_actions(state)
+    return rng.choice(actions)
+
+
+def pick_action_mcts(
+    state: GameState,
+    bonus_names: Tuple[str, str, str],
+    time_limit: float = 0.5,
+    rng: Optional[random_module.Random] = None,
+) -> object:
+    """MCTS agent."""
+    solver = MCTSSolver(bonus_names, time_limit=time_limit, rollout_rng=rng)
+    _, action = solver.solve(state)
+    return action
+
+
+# ============================================================================
+# Play a complete game
+# ============================================================================
+
+def play_game(
+    circle: List[int],
+    bonus_names: Tuple[str, str, str],
+    start_index: int,
+    agent_p1: str = "mcts",
+    agent_p2: str = "mcts",
+    time_limit: float = 0.5,
+    rng: Optional[random_module.Random] = None,
+    verbose: bool = False,
+) -> Tuple[int, int, int]:
+    """Play a complete game. Returns (p1_score, p2_score, utility)."""
+    if rng is None:
+        rng = random_module.Random()
+    state = make_initial_state(circle, bonus_names, start_index)
+    agents = [agent_p1, agent_p2]
+    turn_num = 0
+
+    while not state.is_terminal():
+        p = state.player
+        agent = agents[p]
+
+        if agent == "random":
+            action = pick_action_random(state, rng)
+        elif agent == "mcts":
+            action = pick_action_mcts(state, bonus_names, time_limit, rng)
+        else:
+            action = pick_action_random(state, rng)
+
+        if verbose and state.phase == Phase.DRAFT:
+            turn_num += 1
+            act: DraftAction = action
+            skipped = act.offset
+            card = state.circle[act.offset]
+            player_name = "P1" if p == 0 else "P2"
+            print(f"  Turn {turn_num:2d} ({player_name}): "
+                  f"draft card {card:2d} (skip {skipped}), "
+                  f"circle has {len(state.circle)} cards")
+
+        state = apply_action(state, action)
+
+    s1, s2 = compute_scores(state.towns[0], state.towns[1], bonus_names)
+    u = s1 - s2
+
+    if verbose:
+        print()
+        print_town(state.towns[0], "P1 Town")
+        print_town(state.towns[1], "P2 Town")
+        t1 = terrain_score(state.towns[0])
+        t2 = terrain_score(state.towns[1])
+        print(f"Terrain:  P1={t1}  P2={t2}")
+        print(f"Total:    P1={s1}  P2={s2}")
+        print(f"Utility:  {u:+d}  ({'P1 wins' if u > 0 else 'P2 wins' if u < 0 else 'Tie'})")
+
+    return s1, s2, u
 
 
 # ============================================================================
@@ -917,12 +1171,11 @@ def find_best_start(
 
     for k in range(n):
         s0 = make_initial_state(circle, bonus_names, k)
-        solver = Solver(bonus_names, time_limit=time_per_start)
+        solver = MCTSSolver(bonus_names, time_limit=time_per_start)
         v, _ = solver.solve(s0)
         card_name = circle[k]
-        print(f"  Start index {k:2d} (card {card_name:2d}): "
-              f"est value = {v:+d}  ({solver.nodes} nodes, "
-              f"depth reached in {time_per_start:.1f}s)")
+        print(f"  Start {k:2d} (card {card_name:2d}): "
+              f"val={v:+d}  ({solver.rollouts} rollouts)")
 
         if best_v is None or v < best_v:
             best_v, best_k = v, k
@@ -965,22 +1218,17 @@ def print_town(m: TownMap, label: str = "") -> None:
 
 def generate_deal(seed: int = 42) -> Tuple[Tuple[str, str, str], List[int]]:
     """Generate a random deal: 3 bonus cards + 15-card circle."""
-    import random
-    rng = random.Random(seed)
-
+    rng = random_module.Random(seed)
     card_ids = list(range(18))
     rng.shuffle(card_ids)
-
-    # First 3 become bonus cards (use their scoring side)
     bonus_ids = card_ids[:3]
     circle_ids = card_ids[3:]
-
     bonus_names = tuple(CARD_BONUS_MAP[cid] for cid in bonus_ids)
     return bonus_names, circle_ids  # type: ignore
 
 
 # ============================================================================
-# CLI
+# CLI commands
 # ============================================================================
 
 def cmd_verify_cards() -> None:
@@ -998,6 +1246,69 @@ def cmd_verify_cards() -> None:
         print()
 
 
+def cmd_play(seed: int, time_limit: float) -> None:
+    bonus_names, circle = generate_deal(seed)
+    print(f"Deal (seed={seed}):")
+    print(f"  Bonuses: {', '.join(bonus_names)}")
+    print(f"  Circle ({len(circle)} cards): {circle}")
+    print()
+
+    print("MCTS (P1) vs MCTS (P2), starting at index 0:")
+    print()
+    play_game(
+        circle, bonus_names, start_index=0,
+        agent_p1="mcts", agent_p2="mcts",
+        time_limit=time_limit, verbose=True,
+    )
+
+
+def cmd_benchmark(n_games: int, time_limit: float, seed: int) -> None:
+    print(f"Benchmark: {n_games} games, {time_limit:.1f}s/move")
+    print()
+
+    results = {"mcts_v_rand": [], "rand_v_rand": []}
+
+    for i in range(n_games):
+        game_seed = seed + i
+        bonus_names, circle = generate_deal(game_seed)
+        rng = random_module.Random(game_seed)
+
+        # Random vs Random
+        s1, s2, u = play_game(
+            circle, bonus_names, start_index=0,
+            agent_p1="random", agent_p2="random",
+            rng=random_module.Random(game_seed + 10000),
+        )
+        results["rand_v_rand"].append(u)
+
+        # MCTS vs Random
+        s1, s2, u = play_game(
+            circle, bonus_names, start_index=0,
+            agent_p1="mcts", agent_p2="random",
+            time_limit=time_limit, rng=random_module.Random(game_seed),
+        )
+        results["mcts_v_rand"].append(u)
+
+        rr_avg = sum(results["rand_v_rand"]) / len(results["rand_v_rand"])
+        mr_avg = sum(results["mcts_v_rand"]) / len(results["mcts_v_rand"])
+        print(f"  Game {i+1:3d}/{n_games}: "
+              f"MCTS={u:+d}  "
+              f"(avg MCTS={mr_avg:+.1f}, avg Rand={rr_avg:+.1f})")
+
+    print()
+    print("=== Results ===")
+
+    for label, key in [("Random vs Random", "rand_v_rand"),
+                       ("MCTS vs Random", "mcts_v_rand")]:
+        vals = results[key]
+        avg = sum(vals) / len(vals)
+        wins = sum(1 for v in vals if v > 0)
+        losses = sum(1 for v in vals if v < 0)
+        ties = sum(1 for v in vals if v == 0)
+        print(f"  {label:20s}: avg={avg:+.1f}  "
+              f"W/L/T={wins}/{losses}/{ties}")
+
+
 def cmd_solve(time_limit: float, seed: int) -> None:
     bonus_names, circle = generate_deal(seed)
     print(f"Deal (seed={seed}):")
@@ -1005,33 +1316,35 @@ def cmd_solve(time_limit: float, seed: int) -> None:
     print(f"  Circle:  {circle}")
     print()
 
-    print("Finding Player 2's best starting card...")
+    print("Finding Player 2's best starting card (MCTS)...")
     k, v = find_best_start(circle, bonus_names, time_per_start=time_limit)
     print()
     print(f"Best start index for P2: {k} (card {circle[k]})")
     print(f"Estimated utility (P1-P2): {v:+d}")
-    print()
-
-    # Show the best starting position's solution
-    s0 = make_initial_state(circle, bonus_names, k)
-    solver = Solver(bonus_names, time_limit=time_limit * 3)
-    val, best_act = solver.solve(s0)
-    print(f"From best start, P1's first action: {best_act}")
-    print(f"Value: {val:+d}, Nodes searched: {solver.nodes}")
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Circle the Wagons solver")
     parser.add_argument("--verify-cards", action="store_true",
                         help="Print all 18 cards for visual verification")
-    parser.add_argument("--time-limit", type=float, default=2.0,
-                        help="Seconds per starting position (default: 2.0)")
+    parser.add_argument("--play", action="store_true",
+                        help="Play a complete game with MCTS vs MCTS")
+    parser.add_argument("--benchmark", action="store_true",
+                        help="Benchmark MCTS vs random over multiple games")
+    parser.add_argument("-n", type=int, default=20,
+                        help="Number of benchmark games (default: 20)")
+    parser.add_argument("--time-limit", type=float, default=1.0,
+                        help="Seconds per move/position (default: 1.0)")
     parser.add_argument("--seed", type=int, default=42,
-                        help="Random seed for deal generation (default: 42)")
+                        help="Random seed (default: 42)")
     args = parser.parse_args()
 
     if args.verify_cards:
         cmd_verify_cards()
+    elif args.play:
+        cmd_play(args.seed, args.time_limit)
+    elif args.benchmark:
+        cmd_benchmark(args.n, args.time_limit, args.seed)
     else:
         cmd_solve(args.time_limit, args.seed)
 
