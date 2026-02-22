@@ -1370,13 +1370,19 @@ def pick_action_greedy(
     state: GameState,
     bonus_names: Tuple[str, str, str],
 ) -> object:
-    """Greedy 1-ply agent: pick action maximizing immediate utility."""
+    """Greedy 1-ply agent: pick action maximizing immediate utility.
+    For draft decisions, simulates greedy placements through to next
+    draft to compare cards with their placements resolved."""
     actions = get_actions(state)
     sign = 1 if state.player == 0 else -1
+    is_draft = state.phase == Phase.DRAFT
     best_val = None
     best_act = actions[0]
     for a in actions:
         child = apply_action(state, a)
+        if is_draft:
+            # Simulate greedy placements to next draft/terminal
+            child = _advance_greedy(child, bonus_names)
         v = sign * utility(child.towns[0], child.towns[1], bonus_names)
         if best_val is None or v > best_val:
             best_val = v

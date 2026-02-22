@@ -14,10 +14,15 @@ export function pickActionGreedy(state, bonusNames) {
   const actions = getActions(state);
   if (actions.length === 0) return null;
   const sign = state.player === 0 ? 1 : -1;
+  const isDraft = state.phase === Phase.DRAFT;
   let bestVal = -Infinity;
   let bestAct = actions[0];
   for (const a of actions) {
-    const child = applyAction(state, a);
+    let child = applyAction(state, a);
+    if (isDraft) {
+      // Simulate greedy placements to evaluate draft quality
+      child = advanceGreedy(child, bonusNames);
+    }
     const v = sign * utility(child.towns[0], child.towns[1], bonusNames);
     if (v > bestVal) {
       bestVal = v;
