@@ -226,11 +226,36 @@ def get_icon(m: TownMap, p: Cell) -> Optional[Icon]:
 # ============================================================================
 
 def terrain_score(m: TownMap) -> int:
-    """Sum of largest connected component sizes for each terrain type."""
+    """Sum of largest connected component sizes for each terrain type.
+    Optimized: single pass to group cells by terrain, then BFS inline."""
+    # Group cells by terrain in one pass
+    by_terr: List[List[Cell]] = [[] for _ in range(6)]
+    for p, (tt, _) in m.items():
+        by_terr[tt].append(p)
+
     score = 0
-    for t in TERRAINS:
-        cells = {p for p, (tt, _) in m.items() if tt == t}
-        score += largest_cc(cells)
+    for cells_list in by_terr:
+        if not cells_list:
+            continue
+        cells_set = set(cells_list)
+        seen: Set[Cell] = set()
+        best = 0
+        for start in cells_list:
+            if start in seen:
+                continue
+            stack = [start]
+            seen.add(start)
+            size = 0
+            while stack:
+                x, y = stack.pop()
+                size += 1
+                for q in ((x+1, y), (x-1, y), (x, y+1), (x, y-1)):
+                    if q in cells_set and q not in seen:
+                        seen.add(q)
+                        stack.append(q)
+            if size > best:
+                best = size
+        score += best
     return score
 
 
@@ -256,23 +281,26 @@ def bonus_fortified(m: TownMap) -> int:
 
 
 def bonus_undiscovered(m: TownMap) -> int:
-    """+5 per empty cell fully enclosed (all 8 neighbors occupied)."""
+    """+5 per empty cell fully enclosed (all 8 neighbors occupied).
+    Optimized: use dict membership directly, skip cells in m early."""
     score = 0
     checked: Set[Cell] = set()
+    m_contains = m.__contains__  # avoid attribute lookup in inner loop
+    checked_contains = checked.__contains__
+    checked_add = checked.add
     for x, y in m:
-        for dx in (-1, 0, 1):
-            for dy in (-1, 0, 1):
-                if dx == 0 and dy == 0:
-                    continue
-                nx, ny = x + dx, y + dy
-                if (nx, ny) in m or (nx, ny) in checked:
-                    continue
-                checked.add((nx, ny))
-                if ((nx-1, ny-1) in m and (nx, ny-1) in m and
-                    (nx+1, ny-1) in m and (nx-1, ny) in m and
-                    (nx+1, ny) in m and (nx-1, ny+1) in m and
-                    (nx, ny+1) in m and (nx+1, ny+1) in m):
-                    score += 5
+        for dx, dy in ((-1,-1),(-1,0),(-1,1),(0,-1),(0,1),(1,-1),(1,0),(1,1)):
+            nx, ny = x + dx, y + dy
+            key = (nx, ny)
+            if m_contains(key) or checked_contains(key):
+                continue
+            checked_add(key)
+            # Check all 8 neighbors — fail fast on first missing
+            if (m_contains((nx-1, ny-1)) and m_contains((nx, ny-1)) and
+                m_contains((nx+1, ny-1)) and m_contains((nx-1, ny)) and
+                m_contains((nx+1, ny)) and m_contains((nx-1, ny+1)) and
+                m_contains((nx, ny+1)) and m_contains((nx+1, ny+1))):
+                score += 5
     return score
 
 
@@ -831,15 +859,16 @@ def _order_actions(state: GameState, actions: list) -> list:
 
     # Placement actions: prefer overlap (more compact towns score better)
     p = state.player
-    occupied = set(state.towns[p].keys())
-    if not occupied:
+    m = state.towns[p]
+    if not m:
         return actions
+    m_contains = m.__contains__
 
     def place_key(act):
-        ax, ay, rot = act
-        fp = set(footprint(ax, ay))
-        overlap_count = len(fp & occupied)
-        return -overlap_count  # more overlap = better = sort first
+        ax, ay = act[0], act[1]
+        # Count overlapping cells without creating a set
+        return -(m_contains((ax, ay)) + m_contains((ax+1, ay)) +
+                 m_contains((ax, ay+1)) + m_contains((ax+1, ay+1)))
 
     return sorted(actions, key=place_key)
 
