@@ -370,6 +370,11 @@ button:disabled { opacity: 0.4; cursor: not-allowed; }
   padding: 0.3rem 0.75rem;
 }
 
+#rotate-btn.active {
+  background: var(--accent);
+  outline: 2px solid rgba(255, 255, 255, 0.3);
+}
+
 /* Cells */
 .cell {
   width: var(--cell-size);

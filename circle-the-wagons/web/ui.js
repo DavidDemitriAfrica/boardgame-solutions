@@ -401,7 +401,9 @@ function computePlacementAnchors() {
 
 function showPlacementUI() {
   const isFree = state.phase === Phase.PLACE_FREE;
+  if (isFree && state.free[0].length === 0) return; // no free cards to place
   const cardId = isFree ? state.free[0][0] : state.drafted;
+  if (cardId === undefined || cardId < 0) return; // invalid card
   const freeCount = isFree ? state.free[0].length : 0;
   placementPanel.style.display = '';
   placementPanel.classList.remove('hidden');
@@ -429,6 +431,7 @@ function handlePlacement(ax, ay) {
   hidePlacementUI();
   state = applyAction(state, action);
   rot180 = false;
+  rotateBtn.classList.remove('active');
   afterAction();
 }
 
@@ -438,6 +441,7 @@ function handlePlacement(ax, ay) {
 
 function selectDraft(offset) {
   if (busy || state.player !== 0 || state.phase !== Phase.DRAFT) return;
+  if (offset < 0 || offset >= state.circle.length) return;
   selectedDraftOffset = offset;
   draftControls.style.display = '';
   draftControls.classList.remove('hidden');
@@ -456,6 +460,7 @@ function selectDraft(offset) {
 
 function confirmDraft() {
   if (selectedDraftOffset === null) return;
+  if (selectedDraftOffset >= state.circle.length) return;
   const offset = selectedDraftOffset;
   const cardId = state.circle[offset];
   let msg = `You draft card #${cardId}`;
@@ -521,6 +526,7 @@ async function aiTurn() {
 // ============================================================================
 
 function afterAction() {
+  if (!state) return;
   if (state.isTerminal()) {
     hidePlacementUI();
     renderAll();
@@ -610,31 +616,28 @@ draftConfirmBtn.addEventListener('click', confirmDraft);
 draftCancelBtn.addEventListener('click', cancelDraft);
 
 rulesToggleBtn.addEventListener('click', () => {
-  const isHidden = rulesPanel.style.display === 'none' || rulesPanel.classList.contains('hidden');
-  if (isHidden) {
-    rulesPanel.classList.remove('hidden');
-    rulesPanel.style.display = 'block';
-  } else {
-    rulesPanel.style.display = 'none';
-  }
+  rulesPanel.classList.toggle('hidden');
 });
 rulesCloseBtn.addEventListener('click', () => {
-  rulesPanel.style.display = 'none';
+  rulesPanel.classList.add('hidden');
 });
 
-rotateBtn.addEventListener('click', () => {
+function doRotate() {
+  if (!state) return;
+  const isFree = state.phase === Phase.PLACE_FREE;
+  const cardId = isFree ? state.free[0]?.[0] : state.drafted;
+  if (cardId === undefined || cardId < 0) return;
   rot180 = !rot180;
-  const cardId = state.phase === Phase.PLACE_FREE ? state.free[0][0] : state.drafted;
+  rotateBtn.classList.toggle('active', rot180);
   renderCardPreview(cardId, rot180);
   if (ghostAnchor) renderTown(0);
-});
+}
+
+rotateBtn.addEventListener('click', doRotate);
 
 document.addEventListener('keydown', (e) => {
   if ((e.key === 'r' || e.key === 'R') && !placementPanel.classList.contains('hidden')) {
-    rot180 = !rot180;
-    const cardId = state.phase === Phase.PLACE_FREE ? state.free[0][0] : state.drafted;
-    renderCardPreview(cardId, rot180);
-    if (ghostAnchor) renderTown(0);
+    doRotate();
   }
 });
 
