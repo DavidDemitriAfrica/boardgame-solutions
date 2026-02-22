@@ -179,10 +179,9 @@ def largest_cc(cells: Set[Cell]) -> int:
         seen.add(start)
         size = 0
         while stack:
-            p = stack.pop()
+            x, y = stack.pop()
             size += 1
-            for d in N4:
-                q = add(p, d)
+            for q in ((x+1, y), (x-1, y), (x, y+1), (x, y-1)):
                 if q in cells and q not in seen:
                     seen.add(q)
                     stack.append(q)
@@ -202,10 +201,9 @@ def connected_components(cells: Set[Cell]) -> List[Set[Cell]]:
         seen.add(start)
         comp: Set[Cell] = set()
         while stack:
-            p = stack.pop()
-            comp.add(p)
-            for d in N4:
-                q = add(p, d)
+            x, y = stack.pop()
+            comp.add((x, y))
+            for q in ((x+1, y), (x-1, y), (x, y+1), (x, y-1)):
                 if q in cells and q not in seen:
                     seen.add(q)
                     stack.append(q)
@@ -243,39 +241,51 @@ def terrain_score(m: TownMap) -> int:
 def bonus_fortified(m: TownMap) -> int:
     """+7 per 2x2 block where all 4 cells have Fort icon."""
     score = 0
-    occupied = set(m.keys())
-    for (x, y) in occupied:
-        if all(
-            get_icon(m, (x + i, y + j)) == Icon.Fort
-            for i in (0, 1) for j in (0, 1)
-        ):
+    Ft = Icon.Fort
+    for x, y in m:
+        t00 = m.get((x, y))
+        t10 = m.get((x+1, y))
+        t01 = m.get((x, y+1))
+        t11 = m.get((x+1, y+1))
+        if (t00 is not None and t00[1] == Ft and
+            t10 is not None and t10[1] == Ft and
+            t01 is not None and t01[1] == Ft and
+            t11 is not None and t11[1] == Ft):
             score += 7
     return score
 
 
 def bonus_undiscovered(m: TownMap) -> int:
     """+5 per empty cell fully enclosed (all 8 neighbors occupied)."""
-    occupied = set(m.keys())
-    candidates: Set[Cell] = set()
-    for p in occupied:
-        for d in N8:
-            q = add(p, d)
-            if q not in occupied:
-                candidates.add(q)
     score = 0
-    for p in candidates:
-        if all(add(p, d) in occupied for d in N8):
-            score += 5
+    checked: Set[Cell] = set()
+    for x, y in m:
+        for dx in (-1, 0, 1):
+            for dy in (-1, 0, 1):
+                if dx == 0 and dy == 0:
+                    continue
+                nx, ny = x + dx, y + dy
+                if (nx, ny) in m or (nx, ny) in checked:
+                    continue
+                checked.add((nx, ny))
+                if ((nx-1, ny-1) in m and (nx, ny-1) in m and
+                    (nx+1, ny-1) in m and (nx-1, ny) in m and
+                    (nx+1, ny) in m and (nx-1, ny+1) in m and
+                    (nx, ny+1) in m and (nx+1, ny+1) in m):
+                    score += 5
     return score
 
 
 def bonus_rifles_ready(m: TownMap) -> int:
     """+2 per Fort that is adjacent (N4) to a Gun."""
     score = 0
-    for p, (_, ic) in m.items():
+    for (x, y), (_, ic) in m.items():
         if ic == Icon.Fort:
-            if any(get_icon(m, add(p, d)) == Icon.Gun for d in N4):
-                score += 2
+            for nx, ny in ((x+1,y),(x-1,y),(x,y+1),(x,y-1)):
+                t = m.get((nx, ny))
+                if t is not None and t[1] == Icon.Gun:
+                    score += 2
+                    break
     return score
 
 
@@ -322,10 +332,11 @@ def bonus_cool_water(m: TownMap) -> int:
         if len(comp) != max_size:
             continue
         wag_count = 0
-        for p, (_, ic) in m.items():
+        for (x, y), (_, ic) in m.items():
             if ic != Icon.Wagon:
                 continue
-            if p in comp or any(add(p, d) in comp for d in N4):
+            if ((x, y) in comp or (x+1,y) in comp or (x-1,y) in comp or
+                (x,y+1) in comp or (x,y-1) in comp):
                 wag_count += 1
         best = max(best, wag_count)
     return 3 * best
@@ -339,9 +350,14 @@ def bonus_prairie_life(m: TownMap) -> int:
 def bonus_bootleggers(m: TownMap) -> int:
     """+2 per Beer adjacent to Wagon, -1 per Beer not adjacent."""
     score = 0
-    for p, (_, ic) in m.items():
+    for (x, y), (_, ic) in m.items():
         if ic == Icon.Beer:
-            adj = any(get_icon(m, add(p, d)) == Icon.Wagon for d in N4)
+            adj = False
+            for nx, ny in ((x+1,y),(x-1,y),(x,y+1),(x,y-1)):
+                t = m.get((nx, ny))
+                if t is not None and t[1] == Icon.Wagon:
+                    adj = True
+                    break
             score += 2 if adj else -1
     return score
 
@@ -401,28 +417,37 @@ def bonus_the_clearing(m: TownMap) -> int:
 
 def bonus_happy_cows(m: TownMap) -> int:
     """+2 per Cow not on Snow and not N4-adjacent to Snow."""
+    Snw = Terr.Snow
     score = 0
-    for p, (t, ic) in m.items():
-        if ic != Icon.Cow:
+    for (x, y), (t, ic) in m.items():
+        if ic != Icon.Cow or t == Snw:
             continue
-        if t == Terr.Snow:
-            continue
-        if any(get_terr(m, add(p, d)) == Terr.Snow for d in N4):
-            continue
-        score += 2
+        adj_snow = False
+        for nx, ny in ((x+1,y),(x-1,y),(x,y+1),(x,y-1)):
+            nb = m.get((nx, ny))
+            if nb is not None and nb[0] == Snw:
+                adj_snow = True
+                break
+        if not adj_snow:
+            score += 2
     return score
 
 
 def bonus_badlands(m: TownMap) -> int:
     """+4 per Gun between 2 Deserts on opposite sides (H or V)."""
+    Ds = Terr.Desert
     score = 0
-    for p, (_, ic) in m.items():
+    for (x, y), (_, ic) in m.items():
         if ic != Icon.Gun:
             continue
-        h = (get_terr(m, add(p, (-1, 0))) == Terr.Desert and
-             get_terr(m, add(p, (1, 0))) == Terr.Desert)
-        v = (get_terr(m, add(p, (0, -1))) == Terr.Desert and
-             get_terr(m, add(p, (0, 1))) == Terr.Desert)
+        left = m.get((x-1, y))
+        right = m.get((x+1, y))
+        h = (left is not None and left[0] == Ds and
+             right is not None and right[0] == Ds)
+        down = m.get((x, y-1))
+        up = m.get((x, y+1))
+        v = (down is not None and down[0] == Ds and
+             up is not None and up[0] == Ds)
         if h or v:
             score += 4
     return score
@@ -430,22 +455,34 @@ def bonus_badlands(m: TownMap) -> int:
 
 def bonus_gold_country(m: TownMap) -> int:
     """+2 per Mine on or N4-adjacent to Mountains."""
+    Mtn = Terr.Mountains
     score = 0
-    for p, (t, ic) in m.items():
+    for (x, y), (t, ic) in m.items():
         if ic != Icon.Mine:
             continue
-        if t == Terr.Mountains:
+        if t == Mtn:
             score += 2
-        elif any(get_terr(m, add(p, d)) == Terr.Mountains for d in N4):
-            score += 2
+            continue
+        for nx, ny in ((x+1,y),(x-1,y),(x,y+1),(x,y-1)):
+            nb = m.get((nx, ny))
+            if nb is not None and nb[0] == Mtn:
+                score += 2
+                break
     return score
 
 
 def bonus_circle_the_wagons(m: TownMap) -> int:
     """+6 per occupied cell whose 4 orthogonal neighbors all have Wagon."""
+    Wg = Icon.Wagon
     score = 0
-    for p in m:
-        if all(get_icon(m, add(p, d)) == Icon.Wagon for d in N4):
+    for x, y in m:
+        ok = True
+        for nx, ny in ((x+1,y),(x-1,y),(x,y+1),(x,y-1)):
+            nb = m.get((nx, ny))
+            if nb is None or nb[1] != Wg:
+                ok = False
+                break
+        if ok:
             score += 6
     return score
 
@@ -560,40 +597,40 @@ def footprint(ax: int, ay: int) -> Tuple[Cell, Cell, Cell, Cell]:
     return ((ax, ay), (ax + 1, ay), (ax, ay + 1), (ax + 1, ay + 1))
 
 
+# Precomputed: all (dx,dy) offsets from an occupied cell that yield valid anchors.
+# Covers both overlap (footprint covers the cell) and edge-adjacency (footprint
+# touches a N4 neighbor). 12 offsets vs the old code's 20 iterations.
+_ANCHOR_OFFSETS = (
+    (-2, -1), (-2, 0), (-1, -2), (-1, -1), (-1, 0), (-1, 1),
+    (0, -2), (0, -1), (0, 0), (0, 1), (1, -1), (1, 0),
+)
+
+
 def candidate_anchors(m: TownMap) -> Set[Cell]:
-    """Finite set of anchor positions that could yield legal placements."""
-    occupied = set(m.keys())
-    if not occupied:
+    """Finite set of anchor positions that yield legal placements.
+    All returned anchors are guaranteed legal (overlap or edge-adjacent)."""
+    if not m:
         return {(0, 0)}
     cand: Set[Cell] = set()
-    for (x, y) in occupied:
-        # Overlap candidates: anchors whose 2x2 footprint includes (x,y)
-        for i in (0, 1):
-            for j in (0, 1):
-                cand.add((x - i, y - j))
-        # Adjacency candidates
-        for dx, dy in N4:
-            nx, ny = x + dx, y + dy
-            for i in (0, 1):
-                for j in (0, 1):
-                    cand.add((nx - i, ny - j))
+    for x, y in m:
+        for dx, dy in _ANCHOR_OFFSETS:
+            cand.add((x + dx, y + dy))
     return cand
 
 
 def is_legal_placement(m: TownMap, ax: int, ay: int) -> bool:
     """Check if placing a 2x2 card anchored at (ax,ay) is legal."""
-    occupied = set(m.keys())
-    if not occupied:
+    if not m:
         return True
-    fp = set(footprint(ax, ay))
-    # Overlap check
-    if fp & occupied:
+    # Check if any footprint cell is occupied (overlap)
+    if (ax, ay) in m or (ax+1, ay) in m or (ax, ay+1) in m or (ax+1, ay+1) in m:
         return True
-    # Edge adjacency check
-    for p in fp:
-        for d in N4:
-            q = add(p, d)
-            if q not in fp and q in occupied:
+    # Edge adjacency: check if any footprint cell has an occupied N4 neighbor
+    # that is NOT part of the footprint
+    fp = {(ax, ay), (ax+1, ay), (ax, ay+1), (ax+1, ay+1)}
+    for x, y in fp:
+        for nx, ny in ((x+1,y),(x-1,y),(x,y+1),(x,y-1)):
+            if (nx, ny) not in fp and (nx, ny) in m:
                 return True
     return False
 
@@ -608,12 +645,12 @@ def place_card(m: TownMap, card: Card, ax: int, ay: int, rot180: bool) -> TownMa
 
 
 def legal_placements(m: TownMap, card: Card) -> List[Tuple[int, int, bool]]:
-    """Return all legal (ax, ay, rot180) placements for card into town m."""
+    """Return all legal (ax, ay, rot180) placements for card into town m.
+    Note: candidate_anchors only returns legal positions, no extra check needed."""
     result = []
     for (ax, ay) in candidate_anchors(m):
-        if is_legal_placement(m, ax, ay):
-            result.append((ax, ay, False))
-            result.append((ax, ay, True))
+        result.append((ax, ay, False))
+        result.append((ax, ay, True))
     return result
 
 
@@ -813,7 +850,6 @@ class AlphaBetaSolver:
         self.bonus_names = bonus_names
         self.time_limit = time_limit
         self.max_depth = max_depth
-        self.tt: Dict[tuple, Tuple[int, int]] = {}
         self.nodes = 0
         self.deadline = 0.0
         self.depth_reached = 0
@@ -823,7 +859,6 @@ class AlphaBetaSolver:
 
     def solve(self, state: GameState) -> Tuple[int, Optional[object]]:
         self.deadline = time.time() + self.time_limit
-        self.tt.clear()
         self.nodes = 0
         self.depth_reached = 0
 
@@ -852,18 +887,12 @@ class AlphaBetaSolver:
 
         p = state.player
         alpha, beta = -999999, 999999
+        actions = _order_actions(state, actions)
 
-        # Sort by heuristic at root only (expensive but only done once)
-        scored = []
-        for a in actions:
-            child = apply_action(state, a)
-            scored.append((self.heuristic(child), a))
-        scored.sort(key=lambda x: x[0], reverse=(p == 0))
-
-        best_act = scored[0][1]
+        best_act = actions[0]
         best_val = -999999 if p == 0 else 999999
 
-        for _, a in scored:
+        for a in actions:
             v = self._alphabeta(apply_action(state, a), depth - 1, alpha, beta)
             if p == 0:
                 if v > best_val:
@@ -880,7 +909,7 @@ class AlphaBetaSolver:
 
     def _alphabeta(self, state: GameState, depth: int, alpha: int, beta: int) -> int:
         self.nodes += 1
-        if self.nodes % 1000 == 0 and time.time() >= self.deadline:
+        if self.nodes % 5000 == 0 and time.time() >= self.deadline:
             raise TimeoutError
 
         state.normalize()
@@ -888,13 +917,6 @@ class AlphaBetaSolver:
             return utility(state.towns[0], state.towns[1], self.bonus_names)
         if depth <= 0:
             return self.heuristic(state)
-
-        key = state.freeze_key()
-        cached = self.tt.get(key)
-        if cached is not None:
-            d_rem, val = cached
-            if d_rem >= depth:
-                return val
 
         p = state.player
         actions = _order_actions(state, get_actions(state))
@@ -920,7 +942,6 @@ class AlphaBetaSolver:
                 if alpha >= beta:
                     break
 
-        self.tt[key] = (depth, best)
         return best
 
 
@@ -971,7 +992,8 @@ class MCTSNode:
 
 
 class MCTSSolver:
-    """MCTS solver with UCT and random rollouts.
+    """MCTS solver with UCT.
+    Uses heuristic leaf evaluation by default, with optional random rollouts.
     Falls back to alpha-beta for endgame positions."""
 
     def __init__(
@@ -980,12 +1002,14 @@ class MCTSSolver:
         time_limit: float = 2.0,
         endgame_cards: int = 5,
         rollout_rng: Optional[random_module.Random] = None,
+        use_rollouts: bool = False,
     ):
         self.bonus_names = bonus_names
         self.time_limit = time_limit
         self.endgame_cards = endgame_cards
         self.rng = rollout_rng or random_module.Random()
         self.rollouts = 0
+        self.use_rollouts = use_rollouts
 
     def solve(self, state: GameState) -> Tuple[int, Optional[object]]:
         """Run MCTS. Returns (estimated value, best action)."""
@@ -1007,7 +1031,11 @@ class MCTSSolver:
             node = self._select(root)
             if not node.state.is_terminal():
                 node = self._expand(node)
-            value = self._rollout(node.state)
+            if self.use_rollouts:
+                value = self._rollout(node.state)
+            else:
+                value = float(utility(
+                    node.state.towns[0], node.state.towns[1], self.bonus_names))
             self._backprop(node, value)
             self.rollouts += 1
 
@@ -1037,18 +1065,99 @@ class MCTSSolver:
         return child
 
     def _rollout(self, state: GameState) -> float:
-        """Random playout to terminal state."""
-        s = state.copy()
-        depth = 0
-        max_rollout_depth = 200
-        while not s.is_terminal() and depth < max_rollout_depth:
-            actions = get_actions(s)
-            if not actions:
+        """Fast random playout to terminal state.
+        Inlines state transitions and samples placements without full
+        enumeration, avoiding apply_action copy overhead and candidate_anchors."""
+        # Destructure into locals for speed
+        circle = list(state.circle)
+        towns_0 = dict(state.towns[0])
+        towns_1 = dict(state.towns[1])
+        free_0 = list(state.free[0])
+        free_1 = list(state.free[1])
+        player = state.player
+        phase = int(state.phase)
+        drafted = state.drafted
+        bonus_names = state.bonus_names
+        rng = self.rng
+
+        PH_FREE = 0       # Phase.PLACE_FREE
+        PH_DRAFT = 1      # Phase.DRAFT
+        PH_PLACE = 2      # Phase.PLACE_DRAFT
+
+        free = [free_0, free_1]
+        towns = [towns_0, towns_1]
+
+        # Initial normalize
+        if phase == PH_FREE and not free[player]:
+            if circle:
+                phase = PH_DRAFT
+
+        for _ in range(200):
+            # Terminal check
+            if not circle and not free_0 and not free_1 and drafted == -1:
                 break
-            a = self.rng.choice(actions)
-            s = apply_action(s, a)
-            depth += 1
-        return float(utility(s.towns[0], s.towns[1], self.bonus_names))
+
+            p = player
+            m = towns[p]
+
+            if phase == PH_FREE:
+                if not free[p]:
+                    break  # terminal (shouldn't reach here after normalize)
+                card_id = free[p].pop(0)
+                quads = CARDS[card_id].quads
+                # Sample random placement (overlap or edge-adjacent)
+                if not m:
+                    ax, ay = 0, 0
+                else:
+                    keys = list(m)
+                    x, y = keys[rng.randrange(len(keys))]
+                    dx, dy = _ANCHOR_OFFSETS[rng.randrange(12)]
+                    ax, ay = x + dx, y + dy
+                if rng.randrange(2):  # rot180
+                    m[(ax, ay)] = quads[3]; m[(ax+1, ay)] = quads[2]
+                    m[(ax, ay+1)] = quads[1]; m[(ax+1, ay+1)] = quads[0]
+                else:
+                    m[(ax, ay)] = quads[0]; m[(ax+1, ay)] = quads[1]
+                    m[(ax, ay+1)] = quads[2]; m[(ax+1, ay+1)] = quads[3]
+                # Normalize
+                if not free[p]:
+                    if circle:
+                        phase = PH_DRAFT
+
+            elif phase == PH_DRAFT:
+                n = len(circle)
+                offset = rng.randrange(n)
+                chosen = circle[offset]
+                if offset > 0:
+                    free[1 - p].extend(circle[:offset])
+                del circle[:offset + 1]
+                drafted = chosen
+                phase = PH_PLACE
+
+            elif phase == PH_PLACE:
+                quads = CARDS[drafted].quads
+                if not m:
+                    ax, ay = 0, 0
+                else:
+                    keys = list(m)
+                    x, y = keys[rng.randrange(len(keys))]
+                    dx, dy = _ANCHOR_OFFSETS[rng.randrange(12)]
+                    ax, ay = x + dx, y + dy
+                if rng.randrange(2):  # rot180
+                    m[(ax, ay)] = quads[3]; m[(ax+1, ay)] = quads[2]
+                    m[(ax, ay+1)] = quads[1]; m[(ax+1, ay+1)] = quads[0]
+                else:
+                    m[(ax, ay)] = quads[0]; m[(ax+1, ay)] = quads[1]
+                    m[(ax, ay+1)] = quads[2]; m[(ax+1, ay+1)] = quads[3]
+                drafted = -1
+                player = 1 - p
+                phase = PH_FREE
+                # Normalize
+                if not free[player]:
+                    if circle:
+                        phase = PH_DRAFT
+
+        return float(utility(towns_0, towns_1, bonus_names))
 
     def _backprop(self, node: MCTSNode, value: float) -> None:
         while node is not None:
@@ -1065,6 +1174,70 @@ def pick_action_random(state: GameState, rng: random_module.Random) -> object:
     """Random agent."""
     actions = get_actions(state)
     return rng.choice(actions)
+
+
+def pick_action_greedy(
+    state: GameState,
+    bonus_names: Tuple[str, str, str],
+) -> object:
+    """Greedy 1-ply agent: pick action maximizing immediate utility."""
+    actions = get_actions(state)
+    sign = 1 if state.player == 0 else -1
+    best_val = None
+    best_act = actions[0]
+    for a in actions:
+        child = apply_action(state, a)
+        v = sign * utility(child.towns[0], child.towns[1], bonus_names)
+        if best_val is None or v > best_val:
+            best_val = v
+            best_act = a
+    return best_act
+
+
+def _advance_greedy(state: GameState, bonus_names: Tuple[str, str, str]) -> GameState:
+    """Apply greedy placements until the next draft decision or terminal."""
+    while not state.is_terminal():
+        if state.phase == Phase.DRAFT:
+            return state
+        action = pick_action_greedy(state, bonus_names)
+        state = apply_action(state, action)
+    return state
+
+
+def pick_action_lookahead(
+    state: GameState,
+    bonus_names: Tuple[str, str, str],
+    endgame_cards: int = 4,
+    endgame_time: float = 5.0,
+) -> object:
+    """Lookahead agent: greedy for placements, draft-aware for drafts.
+    For drafts: tries each option, greedy-places the result, evaluates.
+    For placements: standard greedy.
+    Falls back to exact alpha-beta when few enough cards remain."""
+    rem = _remaining_cards(state)
+    if rem <= endgame_cards:
+        ab = AlphaBetaSolver(bonus_names, time_limit=endgame_time)
+        _, action = ab.solve(state)
+        if action is not None:
+            return action
+
+    if state.phase != Phase.DRAFT:
+        return pick_action_greedy(state, bonus_names)
+
+    sign = 1 if state.player == 0 else -1
+    best_val = None
+    best_act = None
+
+    for draft_act in get_actions(state):
+        child = apply_action(state, draft_act)
+        # Greedy-place the drafted card + any free cards until next draft
+        child = _advance_greedy(child, bonus_names)
+        v = sign * utility(child.towns[0], child.towns[1], bonus_names)
+        if best_val is None or v > best_val:
+            best_val = v
+            best_act = draft_act
+
+    return best_act
 
 
 def pick_action_mcts(
@@ -1106,6 +1279,10 @@ def play_game(
 
         if agent == "random":
             action = pick_action_random(state, rng)
+        elif agent == "greedy":
+            action = pick_action_greedy(state, bonus_names)
+        elif agent == "lookahead":
+            action = pick_action_lookahead(state, bonus_names)
         elif agent == "mcts":
             action = pick_action_mcts(state, bonus_names, time_limit, rng)
         else:
@@ -1253,11 +1430,11 @@ def cmd_play(seed: int, time_limit: float) -> None:
     print(f"  Circle ({len(circle)} cards): {circle}")
     print()
 
-    print("MCTS (P1) vs MCTS (P2), starting at index 0:")
+    print("Lookahead (P1) vs Lookahead (P2), starting at index 0:")
     print()
     play_game(
         circle, bonus_names, start_index=0,
-        agent_p1="mcts", agent_p2="mcts",
+        agent_p1="lookahead", agent_p2="lookahead",
         time_limit=time_limit, verbose=True,
     )
 
@@ -1266,47 +1443,129 @@ def cmd_benchmark(n_games: int, time_limit: float, seed: int) -> None:
     print(f"Benchmark: {n_games} games, {time_limit:.1f}s/move")
     print()
 
-    results = {"mcts_v_rand": [], "rand_v_rand": []}
+    results = {
+        "rand_v_rand": [],
+        "greedy_v_rand": [],
+        "look_v_rand": [],
+        "look_v_greedy": [],
+    }
 
     for i in range(n_games):
         game_seed = seed + i
         bonus_names, circle = generate_deal(game_seed)
-        rng = random_module.Random(game_seed)
 
         # Random vs Random
-        s1, s2, u = play_game(
+        _, _, u = play_game(
             circle, bonus_names, start_index=0,
             agent_p1="random", agent_p2="random",
             rng=random_module.Random(game_seed + 10000),
         )
         results["rand_v_rand"].append(u)
 
-        # MCTS vs Random
-        s1, s2, u = play_game(
+        # Greedy vs Random
+        _, _, u = play_game(
             circle, bonus_names, start_index=0,
-            agent_p1="mcts", agent_p2="random",
-            time_limit=time_limit, rng=random_module.Random(game_seed),
+            agent_p1="greedy", agent_p2="random",
+            rng=random_module.Random(game_seed + 20000),
         )
-        results["mcts_v_rand"].append(u)
+        results["greedy_v_rand"].append(u)
 
-        rr_avg = sum(results["rand_v_rand"]) / len(results["rand_v_rand"])
-        mr_avg = sum(results["mcts_v_rand"]) / len(results["mcts_v_rand"])
+        # Lookahead vs Random
+        _, _, u_lr = play_game(
+            circle, bonus_names, start_index=0,
+            agent_p1="lookahead", agent_p2="random",
+            rng=random_module.Random(game_seed),
+        )
+        results["look_v_rand"].append(u_lr)
+
+        # Lookahead vs Greedy
+        _, _, u_lg = play_game(
+            circle, bonus_names, start_index=0,
+            agent_p1="lookahead", agent_p2="greedy",
+            rng=random_module.Random(game_seed + 30000),
+        )
+        results["look_v_greedy"].append(u_lg)
+
+        def avg(vals):
+            return sum(vals) / len(vals) if vals else 0
+
         print(f"  Game {i+1:3d}/{n_games}: "
-              f"MCTS={u:+d}  "
-              f"(avg MCTS={mr_avg:+.1f}, avg Rand={rr_avg:+.1f})")
+              f"LvR={u_lr:+d} LvG={u_lg:+d}  "
+              f"(avg LvR={avg(results['look_v_rand']):+.1f} "
+              f"LvG={avg(results['look_v_greedy']):+.1f})")
 
     print()
     print("=== Results ===")
 
-    for label, key in [("Random vs Random", "rand_v_rand"),
-                       ("MCTS vs Random", "mcts_v_rand")]:
+    for label, key in [
+        ("Random vs Random", "rand_v_rand"),
+        ("Greedy vs Random", "greedy_v_rand"),
+        ("Lookahead vs Random", "look_v_rand"),
+        ("Lookahead vs Greedy", "look_v_greedy"),
+    ]:
         vals = results[key]
-        avg = sum(vals) / len(vals)
+        avg_v = sum(vals) / len(vals)
         wins = sum(1 for v in vals if v > 0)
         losses = sum(1 for v in vals if v < 0)
         ties = sum(1 for v in vals if v == 0)
-        print(f"  {label:20s}: avg={avg:+.1f}  "
+        print(f"  {label:22s}: avg={avg_v:+.1f}  "
               f"W/L/T={wins}/{losses}/{ties}")
+
+
+def cmd_endgame(seed: int) -> None:
+    """Demonstrate exact endgame solving."""
+    print("=== Endgame Exact Solving Demo ===\n")
+
+    for n_cards in (1, 2, 3):
+        # Try different seeds to find a clean endgame (at a draft decision)
+        best_state = None
+        best_bn = None
+        for trial in range(20):
+            bonus_names, circle = generate_deal(seed + trial)
+            state = make_initial_state(circle, bonus_names, 0)
+            rng = random_module.Random(seed + trial + 1000)
+            # Play forward until n_cards remain
+            while _remaining_cards(state) > n_cards and not state.is_terminal():
+                action = pick_action_random(state, rng)
+                state = apply_action(state, action)
+            rem = _remaining_cards(state)
+            if not state.is_terminal() and rem == n_cards:
+                # Prefer draft-phase positions (cleaner to display)
+                if best_state is None or state.phase == Phase.DRAFT:
+                    best_state = state
+                    best_bn = bonus_names
+                    if state.phase == Phase.DRAFT:
+                        break
+
+        if best_state is None:
+            print(f"  {n_cards}-card endgame: skipped (no suitable position)")
+            continue
+
+        state = best_state
+        bonus_names = best_bn
+        rem = _remaining_cards(state)
+        free_count = len(state.free[0]) + len(state.free[1])
+        circle_count = len(state.circle)
+        drafted = 1 if state.drafted >= 0 else 0
+
+        print(f"  {rem}-card endgame (circle={circle_count} free={free_count} "
+              f"drafted={drafted}):")
+        print(f"    Player to move: P{state.player + 1}")
+        print(f"    Phase: {state.phase.name}")
+        print(f"    Town sizes: P1={len(state.towns[0])} P2={len(state.towns[1])}")
+
+        ab = AlphaBetaSolver(bonus_names, time_limit=60.0, max_depth=200)
+        t0 = time.time()
+        val, best_act = ab.solve(state)
+        elapsed = time.time() - t0
+
+        solved = ab.depth_reached >= 100 or elapsed < ab.time_limit * 0.9
+        status = "EXACT" if solved else f"depth-{ab.depth_reached}"
+        print(f"    Value: {val:+d} ({status})")
+        print(f"    Best action: {best_act}")
+        print(f"    Nodes: {ab.nodes:,}")
+        print(f"    Time: {elapsed:.3f}s ({ab.nodes / max(elapsed, 0.001):,.0f} nodes/s)")
+        print()
 
 
 def cmd_solve(time_limit: float, seed: int) -> None:
@@ -1328,9 +1587,11 @@ def main() -> None:
     parser.add_argument("--verify-cards", action="store_true",
                         help="Print all 18 cards for visual verification")
     parser.add_argument("--play", action="store_true",
-                        help="Play a complete game with MCTS vs MCTS")
+                        help="Play a complete game")
     parser.add_argument("--benchmark", action="store_true",
-                        help="Benchmark MCTS vs random over multiple games")
+                        help="Benchmark agents over multiple games")
+    parser.add_argument("--endgame", action="store_true",
+                        help="Demo exact endgame solving")
     parser.add_argument("-n", type=int, default=20,
                         help="Number of benchmark games (default: 20)")
     parser.add_argument("--time-limit", type=float, default=1.0,
@@ -1345,6 +1606,8 @@ def main() -> None:
         cmd_play(args.seed, args.time_limit)
     elif args.benchmark:
         cmd_benchmark(args.n, args.time_limit, args.seed)
+    elif args.endgame:
+        cmd_endgame(args.seed)
     else:
         cmd_solve(args.time_limit, args.seed)
 
