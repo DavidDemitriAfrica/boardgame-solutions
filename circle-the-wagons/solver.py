@@ -839,7 +839,13 @@ def _order_actions(state: GameState, actions: list) -> list:
 
 
 class AlphaBetaSolver:
-    """Alpha-beta solver with move ordering. Best for endgame positions."""
+    """Alpha-beta solver with move ordering and transposition table.
+    Best for endgame positions."""
+
+    # TT flag constants
+    EXACT = 0
+    LOWERBOUND = 1
+    UPPERBOUND = 2
 
     def __init__(
         self,
@@ -853,6 +859,8 @@ class AlphaBetaSolver:
         self.nodes = 0
         self.deadline = 0.0
         self.depth_reached = 0
+        self.tt: Dict[tuple, Tuple[int, int, int]] = {}  # key -> (value, depth, flag)
+        self.tt_hits = 0
 
     def heuristic(self, state: GameState) -> int:
         return utility(state.towns[0], state.towns[1], self.bonus_names)
@@ -861,6 +869,8 @@ class AlphaBetaSolver:
         self.deadline = time.time() + self.time_limit
         self.nodes = 0
         self.depth_reached = 0
+        self.tt.clear()
+        self.tt_hits = 0
 
         best_val = None
         best_act = None
@@ -918,6 +928,22 @@ class AlphaBetaSolver:
         if depth <= 0:
             return self.heuristic(state)
 
+        # Transposition table lookup
+        key = state.freeze_key()
+        if key in self.tt:
+            tt_val, tt_depth, tt_flag = self.tt[key]
+            if tt_depth >= depth:
+                self.tt_hits += 1
+                if tt_flag == self.EXACT:
+                    return tt_val
+                elif tt_flag == self.LOWERBOUND:
+                    alpha = max(alpha, tt_val)
+                elif tt_flag == self.UPPERBOUND:
+                    beta = min(beta, tt_val)
+                if alpha >= beta:
+                    return tt_val
+
+        alpha_orig = alpha
         p = state.player
         actions = _order_actions(state, get_actions(state))
 
@@ -942,6 +968,15 @@ class AlphaBetaSolver:
                 if alpha >= beta:
                     break
 
+        # Store in transposition table
+        if best <= alpha_orig:
+            tt_flag = self.UPPERBOUND
+        elif best >= beta:
+            tt_flag = self.LOWERBOUND
+        else:
+            tt_flag = self.EXACT
+        self.tt[key] = (best, depth, tt_flag)
+
         return best
 
 
@@ -965,7 +1000,11 @@ class MCTSNode:
     def is_fully_expanded(self) -> bool:
         if self.untried_actions is None:
             self.untried_actions = get_actions(self.state)
-        return len(self.untried_actions) == 0
+        if not self.untried_actions:
+            return True
+        # Progressive widening: limit children to ~sqrt(visits)
+        max_children = max(2, int(math.sqrt(self.visits + 1)))
+        return len(self.children) >= max_children
 
     def best_child(self, c: float = 1.41) -> MCTSNode:
         """UCB1 selection."""
@@ -1209,9 +1248,10 @@ def pick_action_lookahead(
     bonus_names: Tuple[str, str, str],
     endgame_cards: int = 4,
     endgame_time: float = 5.0,
+    draft_depth: int = -1,  # -1 = auto (2 when <=8 cards, 1 otherwise)
 ) -> object:
-    """Lookahead agent: greedy for placements, draft-aware for drafts.
-    For drafts: tries each option, greedy-places the result, evaluates.
+    """Lookahead agent: greedy for placements, minimax for drafts.
+    For drafts: N-ply minimax over draft decisions (greedy placements between).
     For placements: standard greedy.
     Falls back to exact alpha-beta when few enough cards remain."""
     rem = _remaining_cards(state)
@@ -1224,6 +1264,11 @@ def pick_action_lookahead(
     if state.phase != Phase.DRAFT:
         return pick_action_greedy(state, bonus_names)
 
+    # Auto-select draft depth: deeper when fewer cards remain
+    if draft_depth < 0:
+        n_circle = len(state.circle)
+        draft_depth = 2 if n_circle <= 8 else 1
+
     sign = 1 if state.player == 0 else -1
     best_val = None
     best_act = None
@@ -1232,12 +1277,59 @@ def pick_action_lookahead(
         child = apply_action(state, draft_act)
         # Greedy-place the drafted card + any free cards until next draft
         child = _advance_greedy(child, bonus_names)
-        v = sign * utility(child.towns[0], child.towns[1], bonus_names)
+        v = sign * _draft_minimax(child, bonus_names, draft_depth - 1)
         if best_val is None or v > best_val:
             best_val = v
             best_act = draft_act
 
     return best_act
+
+
+def _draft_minimax(
+    state: GameState,
+    bonus_names: Tuple[str, str, str],
+    depth: int,
+    alpha: int = -999999,
+    beta: int = 999999,
+) -> int:
+    """Alpha-beta minimax over draft decisions with greedy placements between.
+    Returns utility from P1's perspective."""
+    if state.is_terminal() or depth <= 0 or state.phase != Phase.DRAFT:
+        return utility(state.towns[0], state.towns[1], bonus_names)
+
+    p = state.player
+    draft_actions = get_actions(state)
+
+    # Pre-sort by greedy evaluation for better pruning
+    sign = 1 if p == 0 else -1
+    scored = []
+    for da in draft_actions:
+        child = apply_action(state, da)
+        child = _advance_greedy(child, bonus_names)
+        v = sign * utility(child.towns[0], child.towns[1], bonus_names)
+        scored.append((v, da, child))
+    scored.sort(reverse=True)  # best first for current player
+
+    if p == 0:
+        best = -999999
+        for _, _, child in scored:
+            v = _draft_minimax(child, bonus_names, depth - 1, alpha, beta)
+            if v > best:
+                best = v
+            alpha = max(alpha, best)
+            if alpha >= beta:
+                break
+    else:
+        best = 999999
+        for _, _, child in scored:
+            v = _draft_minimax(child, bonus_names, depth - 1, alpha, beta)
+            if v < best:
+                best = v
+            beta = min(beta, best)
+            if alpha >= beta:
+                break
+
+    return best
 
 
 def pick_action_mcts(
