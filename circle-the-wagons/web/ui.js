@@ -213,14 +213,17 @@ function renderTown(playerIdx) {
   const el = townEls[playerIdx];
   el.innerHTML = '';
   const m = state.towns[playerIdx];
-  if (m.size === 0) {
-    el.style.gridTemplateColumns = '';
-    return;
-  }
 
   const isHumanPlacing = playerIdx === 0 && !busy &&
     (state.phase === Phase.PLACE_FREE || state.phase === Phase.PLACE_DRAFT) &&
     state.player === 0;
+
+  // Empty town with no pending placement: show blank container
+  if (m.size === 0 && !isHumanPlacing) {
+    el.style.gridTemplateColumns = '';
+    el.onmouseleave = null;
+    return;
+  }
 
   let { x0, x1, y0, y1 } = getTownBounds(m);
 
@@ -261,6 +264,12 @@ function renderTown(playerIdx) {
       if (ghost) {
         const cell = makeCell(ghost[0], ghost[1]);
         cell.classList.add('ghost');
+        // Ghost cells must be clickable to place the card
+        if (isHumanPlacing && ghostAnchor) {
+          cell.style.cursor = 'pointer';
+          const [gx, gy] = ghostAnchor;
+          cell.addEventListener('click', () => handlePlacement(gx, gy));
+        }
         el.appendChild(cell);
       } else if (tile) {
         el.appendChild(makeCell(tile[0], tile[1]));
@@ -278,7 +287,7 @@ function renderTown(playerIdx) {
     }
   }
 
-  // Make occupied cells clickable for overlapping placements
+  // Make occupied/empty cells within anchor footprints clickable + highlighted
   if (isHumanPlacing && placementAnchors) {
     const allCells = el.children;
     let cellIdx = 0;
@@ -290,6 +299,7 @@ function renderTown(playerIdx) {
           const anchorKey = cellKey(x + dx, y + dy);
           if (placementAnchors.has(anchorKey)) {
             cell.style.cursor = 'pointer';
+            cell.classList.add('footprint-cell');
             const ax = x + dx, ay = y + dy;
             cell.addEventListener('click', () => handlePlacement(ax, ay));
             cell.addEventListener('mouseenter', () => { ghostAnchor = [ax, ay]; renderTown(0); });
@@ -299,6 +309,15 @@ function renderTown(playerIdx) {
         }
       }
     }
+  }
+
+  // Clear ghost when mouse leaves the town grid entirely
+  if (isHumanPlacing) {
+    el.onmouseleave = () => {
+      if (ghostAnchor) { ghostAnchor = null; renderTown(0); }
+    };
+  } else {
+    el.onmouseleave = null;
   }
 }
 
@@ -380,13 +399,17 @@ function computePlacementAnchors() {
 }
 
 function showPlacementUI() {
-  const cardId = state.phase === Phase.PLACE_FREE ? state.free[0][0] : state.drafted;
+  const isFree = state.phase === Phase.PLACE_FREE;
+  const cardId = isFree ? state.free[0][0] : state.drafted;
+  const freeCount = isFree ? state.free[0].length : 0;
   placementPanel.style.display = '';
   placementPanel.classList.remove('hidden');
-  placementTitle.textContent = `Place Card #${cardId}`;
+  placementTitle.textContent = isFree
+    ? `Place Free Card #${cardId} (${freeCount} left)`
+    : `Place Card #${cardId}`;
   renderCardPreview(cardId, rot180);
   computePlacementAnchors();
-  setStatus('Click a highlighted cell on your town to place the card. Press <b>R</b> to rotate.');
+  setStatus(`Click a highlighted cell to place card <b>#${cardId}</b>. Press <b>R</b> to rotate.`);
 }
 
 function hidePlacementUI() {
@@ -478,16 +501,28 @@ async function aiTurn() {
 // ============================================================================
 
 function afterAction() {
+  if (state.isTerminal()) {
+    hidePlacementUI();
+    renderAll();
+    showEndModal();
+    return;
+  }
+
+  // Set up placement UI (and anchors) BEFORE rendering so renderTown uses them
+  if (state.player === 0 &&
+      (state.phase === Phase.PLACE_FREE || state.phase === Phase.PLACE_DRAFT)) {
+    showPlacementUI();
+  } else {
+    hidePlacementUI();
+  }
+
   renderAll();
-  if (state.isTerminal()) { showEndModal(); return; }
 
   if (state.player === 0) {
     if (state.phase === Phase.DRAFT) {
       setStatus('Your turn: <b>Draft</b> a card from the circle.');
-    } else {
-      showPlacementUI();
-      renderTown(0);
     }
+    // Placement status was set by showPlacementUI
   } else {
     aiTurn();
   }
