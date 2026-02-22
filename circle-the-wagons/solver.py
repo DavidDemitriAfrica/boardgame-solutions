@@ -1890,6 +1890,128 @@ def cmd_endgame(seed: int) -> None:
         print()
 
 
+def cmd_analyze(n_games: int, seed: int) -> None:
+    """Analyze game statistics across many games for the paper."""
+    print(f"=== Game Analysis ({n_games} games, Lookahead vs Lookahead) ===\n")
+
+    # Accumulators
+    terrain_totals = [0, 0]  # P1, P2 terrain score sums
+    bonus_totals: Dict[str, List[int]] = {}  # bonus_name -> [P1 total, P2 total, game_count]
+    skip_counts = []  # how many cards each player skips per draft
+    utilities = []
+    town_sizes = [[], []]  # final town sizes
+    game_lengths = []  # number of draft decisions per game
+    card_draft_counts: Dict[int, int] = {i: 0 for i in range(18)}  # how often each card is drafted
+
+    for i in range(n_games):
+        game_seed = seed + i
+        bonus_names, circle = generate_deal(game_seed)
+        state = make_initial_state(circle, bonus_names, 0)
+
+        drafts = 0
+        while not state.is_terminal():
+            p = state.player
+            if state.phase == Phase.DRAFT:
+                action = pick_action_lookahead(state, bonus_names)
+                drafts += 1
+                if action.offset > 0:
+                    skip_counts.append(action.offset)
+                card_id = state.circle[action.offset]
+                card_draft_counts[card_id] = card_draft_counts.get(card_id, 0) + 1
+            else:
+                action = pick_action_greedy(state, bonus_names)
+            state = apply_action(state, action)
+
+        game_lengths.append(drafts)
+        s1, s2 = compute_scores(state.towns[0], state.towns[1], bonus_names)
+        u = s1 - s2
+        utilities.append(u)
+
+        ts1 = terrain_score(state.towns[0])
+        ts2 = terrain_score(state.towns[1])
+        terrain_totals[0] += ts1
+        terrain_totals[1] += ts2
+
+        town_sizes[0].append(len(state.towns[0]))
+        town_sizes[1].append(len(state.towns[1]))
+
+        local_fns, interactive_fns = _get_bonus_fns(bonus_names)
+        for name in bonus_names:
+            if name not in bonus_totals:
+                bonus_totals[name] = [0, 0, 0]
+            bonus_totals[name][2] += 1
+            if name in LOCAL_BONUSES:
+                fn = LOCAL_BONUSES[name]
+                bonus_totals[name][0] += fn(state.towns[0])
+                bonus_totals[name][1] += fn(state.towns[1])
+            elif name in INTERACTIVE_BONUSES:
+                fn = INTERACTIVE_BONUSES[name]
+                d1, d2 = fn(state.towns[0], state.towns[1])
+                bonus_totals[name][0] += d1
+                bonus_totals[name][1] += d2
+
+        if (i + 1) % 10 == 0:
+            avg_u = sum(utilities) / len(utilities)
+            wins = sum(1 for v in utilities if v > 0)
+            print(f"  {i+1}/{n_games}: P1 wins {wins}/{i+1} ({100*wins/(i+1):.0f}%), avg utility={avg_u:+.1f}")
+
+    n = len(utilities)
+    print()
+    print("=== Summary ===")
+    print()
+
+    # Outcome distribution
+    wins_p1 = sum(1 for v in utilities if v > 0)
+    wins_p2 = sum(1 for v in utilities if v < 0)
+    ties = sum(1 for v in utilities if v == 0)
+    avg_u = sum(utilities) / n
+    print(f"Outcomes: P1 wins {wins_p1}/{n} ({100*wins_p1/n:.0f}%), "
+          f"P2 wins {wins_p2}/{n} ({100*wins_p2/n:.0f}%), "
+          f"Ties {ties}/{n}")
+    print(f"Average utility: {avg_u:+.1f}")
+    print(f"Utility range: [{min(utilities):+d}, {max(utilities):+d}]")
+    print()
+
+    # Score composition
+    avg_ts = [t / n for t in terrain_totals]
+    print(f"Average terrain score: P1={avg_ts[0]:.1f}  P2={avg_ts[1]:.1f}")
+    print()
+
+    # Bonus analysis
+    print("Bonus breakdown (avg per game when active):")
+    for name in sorted(bonus_totals.keys()):
+        p1_total, p2_total, count = bonus_totals[name]
+        avg1 = p1_total / count if count > 0 else 0
+        avg2 = p2_total / count if count > 0 else 0
+        print(f"  {name:22s}: P1={avg1:+5.1f}  P2={avg2:+5.1f}  (in {count} games)")
+    print()
+
+    # Town sizes
+    avg_town = [sum(s) / n for s in town_sizes]
+    print(f"Average town size: P1={avg_town[0]:.1f}  P2={avg_town[1]:.1f}")
+    print()
+
+    # Draft statistics
+    avg_drafts = sum(game_lengths) / n
+    avg_skip = sum(skip_counts) / len(skip_counts) if skip_counts else 0
+    skip_rate = len(skip_counts) / sum(game_lengths) if game_lengths else 0
+    print(f"Drafting: avg {avg_drafts:.1f} drafts/game, "
+          f"{100*skip_rate:.0f}% involve skips, avg skip={avg_skip:.1f} cards")
+    print()
+
+    # Card popularity
+    print("Most drafted cards:")
+    sorted_cards = sorted(card_draft_counts.items(), key=lambda x: -x[1])
+    for cid, count in sorted_cards[:6]:
+        bonus = CARD_BONUS_MAP.get(cid, "???")
+        print(f"  Card {cid:2d} ({bonus:22s}): drafted {count} times")
+    print()
+    print("Least drafted cards:")
+    for cid, count in sorted_cards[-3:]:
+        bonus = CARD_BONUS_MAP.get(cid, "???")
+        print(f"  Card {cid:2d} ({bonus:22s}): drafted {count} times")
+
+
 def cmd_solve(time_limit: float, seed: int) -> None:
     bonus_names, circle = generate_deal(seed)
     print(f"Deal (seed={seed}):")
@@ -1914,8 +2036,10 @@ def main() -> None:
                         help="Benchmark agents over multiple games")
     parser.add_argument("--endgame", action="store_true",
                         help="Demo exact endgame solving")
+    parser.add_argument("--analyze", action="store_true",
+                        help="Detailed game statistics for the paper")
     parser.add_argument("-n", type=int, default=20,
-                        help="Number of benchmark games (default: 20)")
+                        help="Number of benchmark/analysis games (default: 20)")
     parser.add_argument("--time-limit", type=float, default=1.0,
                         help="Seconds per move/position (default: 1.0)")
     parser.add_argument("--seed", type=int, default=42,
@@ -1930,6 +2054,8 @@ def main() -> None:
         cmd_benchmark(args.n, args.time_limit, args.seed)
     elif args.endgame:
         cmd_endgame(args.seed)
+    elif args.analyze:
+        cmd_analyze(args.n, args.seed)
     else:
         cmd_solve(args.time_limit, args.seed)
 
