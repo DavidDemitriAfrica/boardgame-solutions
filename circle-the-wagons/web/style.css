@@ -276,6 +276,30 @@ button:disabled { opacity: 0.4; cursor: not-allowed; }
   display: flex;
   gap: 0.5rem;
   justify-content: center;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+#draft-info {
+  width: 100%;
+  text-align: center;
+  font-weight: 600;
+  padding: 0.3rem 0.5rem;
+  border-radius: 4px;
+  font-size: 0.9rem;
+}
+
+.draft-info-ok {
+  color: #8bc34a;
+}
+
+.draft-info-warn {
+  color: #ffc107;
+}
+
+.draft-info-danger {
+  color: #ff5252;
+  background: rgba(255, 82, 82, 0.1);
 }
 
 #draft-controls button {

@@ -27,6 +27,7 @@ const statusBar = $('status-bar');
 const circleContainer = $('circle-container');
 const circleCount = $('circle-count');
 const draftControls = $('draft-controls');
+const draftInfo = $('draft-info');
 const draftConfirmBtn = $('draft-confirm-btn');
 const draftCancelBtn = $('draft-cancel-btn');
 const townEls = [$('town-0'), $('town-1')];
@@ -421,8 +422,10 @@ function hidePlacementUI() {
 function handlePlacement(ax, ay) {
   if (busy || state.player !== 0) return;
   const action = [ax, ay, rot180];
-  const cardId = state.phase === Phase.PLACE_FREE ? state.free[0][0] : state.drafted;
-  log(`You place card #${cardId} at (${ax},${ay})${rot180 ? ' rotated' : ''}`, 0);
+  const isFree = state.phase === Phase.PLACE_FREE;
+  const cardId = isFree ? state.free[0][0] : state.drafted;
+  const label = isFree ? 'free card' : 'card';
+  log(`You place ${label} #${cardId} at (${ax},${ay})${rot180 ? ' rotated' : ''}`, 0);
   hidePlacementUI();
   state = applyAction(state, action);
   rot180 = false;
@@ -438,6 +441,16 @@ function selectDraft(offset) {
   selectedDraftOffset = offset;
   draftControls.style.display = '';
   draftControls.classList.remove('hidden');
+
+  // Show skip warning
+  if (offset === 0) {
+    draftInfo.textContent = 'Taking the first card (no cards given to AI).';
+    draftInfo.className = 'draft-info-ok';
+  } else {
+    draftInfo.textContent = `Skipping ${offset} card${offset > 1 ? 's' : ''} to AI!`;
+    draftInfo.className = offset >= 3 ? 'draft-info-danger' : 'draft-info-warn';
+  }
+
   renderCircle();
 }
 
@@ -446,9 +459,10 @@ function confirmDraft() {
   const offset = selectedDraftOffset;
   const cardId = state.circle[offset];
   let msg = `You draft card #${cardId}`;
-  if (offset > 0) msg += ` (skipping ${offset} card${offset > 1 ? 's' : ''} to AI)`;
+  if (offset > 0) msg += ` (giving ${offset} card${offset > 1 ? 's' : ''} to AI)`;
   log(msg, 0);
   draftControls.classList.add('hidden');
+  draftInfo.textContent = '';
   selectedDraftOffset = null;
   state = applyAction(state, { type: 'draft', offset });
   afterAction();
@@ -457,6 +471,7 @@ function confirmDraft() {
 function cancelDraft() {
   selectedDraftOffset = null;
   draftControls.classList.add('hidden');
+  draftInfo.textContent = '';
   renderCircle();
 }
 
@@ -479,12 +494,17 @@ async function aiTurn() {
     if (action.type === 'draft') {
       const cardId = state.circle[action.offset];
       let msg = `AI drafts card #${cardId}`;
-      if (action.offset > 0) msg += ` (skipping ${action.offset})`;
+      if (action.offset > 0) msg += ` (skipping ${action.offset} to you)`;
       log(msg, 1);
     } else {
       const [ax, ay, r] = action;
-      const cardId = state.phase === Phase.PLACE_FREE ? state.free[1][0] : state.drafted;
-      log(`AI places card #${cardId} at (${ax},${ay})${r ? ' rotated' : ''}`, 1);
+      const isFree = state.phase === Phase.PLACE_FREE;
+      const cardId = isFree ? state.free[1][0] : state.drafted;
+      const label = isFree ? 'free card' : 'card';
+      log(`AI places ${label} #${cardId} at (${ax},${ay})${r ? ' rotated' : ''}`, 1);
+      if (isFree) {
+        setStatus(`AI placing free cards (${state.free[1].length} left)...`);
+      }
     }
 
     state = applyAction(state, action);
