@@ -184,6 +184,17 @@ export function terrainScore(m) {
   return score;
 }
 
+/** Returns array of 6 largest-component sizes, indexed by terrain type. */
+export function terrainBreakdown(m) {
+  const sizes = [0, 0, 0, 0, 0, 0];
+  for (const t of TERRAINS) {
+    const cells = new Set();
+    for (const [k, tile] of m) if (tile[0] === t) cells.add(k);
+    sizes[t] = largestCC(cells);
+  }
+  return sizes;
+}
+
 // ============================================================================
 // Bonus scoring functions
 // ============================================================================

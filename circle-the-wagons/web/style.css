@@ -98,10 +98,6 @@ button:disabled { opacity: 0.4; cursor: not-allowed; }
   50% { opacity: 0.8; }
 }
 
-.score-zero {
-  opacity: 0.4;
-}
-
 #status-bar {
   text-align: center;
   padding: 0.6rem;
@@ -512,6 +508,32 @@ button:disabled { opacity: 0.4; cursor: not-allowed; }
 .score-label { color: #aaa; }
 .score-val { color: var(--text); }
 
+.score-row.terrain-header:hover { background: rgba(255,255,255,0.05); border-radius: 3px; }
+
+.score-row.sub-row {
+  padding-left: 0.5rem;
+  font-size: 0.7rem;
+  border-bottom: none;
+}
+
+.terr-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  margin-right: 4px;
+  vertical-align: middle;
+}
+
+.terr-dot.terr-0 { background: var(--terr-desert); }
+.terr-dot.terr-1 { background: var(--terr-forest); }
+.terr-dot.terr-2 { background: var(--terr-snow); }
+.terr-dot.terr-3 { background: var(--terr-mountains); }
+.terr-dot.terr-4 { background: var(--terr-plains); }
+.terr-dot.terr-5 { background: var(--terr-water); }
+
+.score-zero { opacity: 0.4; }
+
 /* Game log */
 #game-log {
   max-width: 600px;
@@ -575,6 +597,23 @@ button:disabled { opacity: 0.4; cursor: not-allowed; }
 }
 
 #end-scores .winner { color: #ffd700; font-weight: 700; font-size: 1.1rem; }
+
+.modal-breakdown {
+  text-align: left;
+  font-size: 0.85rem;
+  margin: 0.5rem auto;
+  max-width: 280px;
+}
+
+.modal-row {
+  display: flex;
+  justify-content: space-between;
+  padding: 2px 0;
+}
+
+.modal-row.section-end { border-bottom: 1px solid #444; }
+.modal-row.sub { font-size: 0.75rem; padding-left: 0.5rem; color: #aaa; }
+.modal-row.total-row { border-top: 1px solid #444; font-weight: 700; padding-top: 4px; margin-top: 2px; }
 
 /* Footer */
 footer {

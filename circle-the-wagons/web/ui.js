@@ -5,7 +5,7 @@ import {
   Terr, Icon, Phase, CARDS, CARD_BONUS_MAP, BONUS_DESCRIPTIONS,
   TERR_SHORT, ICON_SHORT, TERR_NAMES, tileAt, cellKey, parseKey,
   townGet, townHas, candidateAnchors,
-  terrainScore, computeScores, computeScoreBreakdown, utility,
+  terrainScore, terrainBreakdown, computeScores, computeScoreBreakdown, utility,
   generateDeal, makeInitialState, getActions, applyAction, GameState,
 } from './game.js';
 
@@ -336,15 +336,38 @@ function renderScores() {
   const [b1, b2] = computeScoreBreakdown(state.towns[0], state.towns[1], state.bonusNames);
   const [s1, s2] = computeScores(state.towns[0], state.towns[1], state.bonusNames);
 
+  const tb1 = terrainBreakdown(state.towns[0]);
+  const tb2 = terrainBreakdown(state.towns[1]);
+
   [b1, b2].forEach((breakdown, idx) => {
     const el = scoreEls[idx];
     el.innerHTML = '';
     const total = idx === 0 ? s1 : s2;
+    const tb = idx === 0 ? tb1 : tb2;
 
+    // Terrain header row with expandable detail
     const terrRow = document.createElement('div');
-    terrRow.className = 'score-row';
+    terrRow.className = 'score-row terrain-header';
     terrRow.innerHTML = `<span class="score-label">Terrain</span><span class="score-val">${breakdown.terrain}</span>`;
+    terrRow.title = 'Click to show terrain breakdown';
+    terrRow.style.cursor = 'pointer';
     el.appendChild(terrRow);
+
+    // Terrain detail rows (hidden by default)
+    const terrDetail = document.createElement('div');
+    terrDetail.className = 'terrain-detail hidden';
+    for (let t = 0; t < 6; t++) {
+      if (tb[t] === 0) continue;
+      const row = document.createElement('div');
+      row.className = 'score-row sub-row';
+      row.innerHTML = `<span class="score-label terr-label"><span class="terr-dot terr-${t}"></span>${TERR_NAMES[t]}</span><span class="score-val">${tb[t]}</span>`;
+      terrDetail.appendChild(row);
+    }
+    el.appendChild(terrDetail);
+
+    terrRow.addEventListener('click', () => {
+      terrDetail.classList.toggle('hidden');
+    });
 
     for (const name of state.bonusNames) {
       if (!name) continue;
@@ -602,22 +625,31 @@ function updateTurnBadges() {
 function showEndModal() {
   const [s1, s2] = computeScores(state.towns[0], state.towns[1], state.bonusNames);
   const [b1, b2] = computeScoreBreakdown(state.towns[0], state.towns[1], state.bonusNames);
+  const tb1 = terrainBreakdown(state.towns[0]);
+  const tb2 = terrainBreakdown(state.towns[1]);
   const diff = s1 - s2;
   let result;
   if (s1 > s2) result = '<div class="winner">You win!</div>';
   else if (s2 > s1) result = '<div class="winner">AI wins!</div>';
   else result = '<div class="winner">It\'s a tie!</div>';
 
-  let breakdown = `${result}<br>`;
-  breakdown += `<div style="text-align:left;font-size:0.85rem;margin:0.5rem auto;max-width:250px">`;
-  breakdown += `<div style="display:flex;justify-content:space-between;padding:2px 0"><span></span><span style="color:#7ec8e3">You</span><span style="color:#ff8a80">AI</span></div>`;
-  breakdown += `<div style="display:flex;justify-content:space-between;padding:2px 0;border-bottom:1px solid #444"><span>Terrain</span><span style="color:#7ec8e3">${b1.terrain}</span><span style="color:#ff8a80">${b2.terrain}</span></div>`;
+  const row = (label, v1, v2, cls = '') =>
+    `<div class="modal-row ${cls}"><span>${label}</span><span style="color:#7ec8e3">${v1}</span><span style="color:#ff8a80">${v2}</span></div>`;
+
+  let breakdown = `${result}<br><div class="modal-breakdown">`;
+  breakdown += row('', 'You', 'AI');
+  breakdown += row('Terrain', b1.terrain, b2.terrain, 'section-end');
+  // Per-terrain detail
+  for (let t = 0; t < 6; t++) {
+    if (tb1[t] === 0 && tb2[t] === 0) continue;
+    breakdown += row(`<span class="terr-dot terr-${t}"></span>${TERR_NAMES[t]}`, tb1[t], tb2[t], 'sub');
+  }
   for (const name of state.bonusNames) {
     if (!name) continue;
     const v1 = b1[name] || 0, v2 = b2[name] || 0;
-    breakdown += `<div style="display:flex;justify-content:space-between;padding:2px 0;font-size:0.8rem"><span>${name}</span><span style="color:#7ec8e3">${v1}</span><span style="color:#ff8a80">${v2}</span></div>`;
+    breakdown += row(name, v1, v2);
   }
-  breakdown += `<div style="display:flex;justify-content:space-between;padding:4px 0;border-top:1px solid #444;font-weight:700"><span>Total</span><span style="color:#7ec8e3">${s1}</span><span style="color:#ff8a80">${s2}</span></div>`;
+  breakdown += row('Total', s1, s2, 'total-row');
   breakdown += `</div>`;
 
   endScores.innerHTML = breakdown;
