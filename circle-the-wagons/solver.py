@@ -57,11 +57,6 @@ Tile = Tuple[Terr, Icon]
 TownMap = Dict[Cell, Tile]
 
 TERRAINS = list(Terr)
-N4 = ((1, 0), (-1, 0), (0, 1), (0, -1))
-N8 = tuple(
-    (dx, dy) for dx in (-1, 0, 1) for dy in (-1, 0, 1) if (dx, dy) != (0, 0)
-)
-
 TERR_SHORT = {
     Terr.Desert: "Des", Terr.Forest: "For", Terr.Snow: "Snw",
     Terr.Mountains: "Mtn", Terr.Plains: "Pln", Terr.Water: "Wat",
@@ -210,15 +205,6 @@ def connected_components(cells: Set[Cell]) -> List[Set[Cell]]:
         comps.append(comp)
     return comps
 
-
-def get_terr(m: TownMap, p: Cell) -> Optional[Terr]:
-    tile = m.get(p)
-    return None if tile is None else tile[0]
-
-
-def get_icon(m: TownMap, p: Cell) -> Optional[Icon]:
-    tile = m.get(p)
-    return None if tile is None else tile[1]
 
 
 # ============================================================================
@@ -643,10 +629,6 @@ def utility(m1: TownMap, m2: TownMap, bonus_names: Tuple[str, str, str]) -> int:
 # Placement logic
 # ============================================================================
 
-def footprint(ax: int, ay: int) -> Tuple[Cell, Cell, Cell, Cell]:
-    return ((ax, ay), (ax + 1, ay), (ax, ay + 1), (ax + 1, ay + 1))
-
-
 # Precomputed: all (dx,dy) offsets from an occupied cell that yield valid anchors.
 # Covers both overlap (footprint covers the cell) and edge-adjacency (footprint
 # touches a N4 neighbor). 12 offsets vs the old code's 20 iterations.
@@ -670,12 +652,11 @@ def candidate_anchors(m: TownMap) -> Set[Cell]:
 
 
 def place_card(m: TownMap, card: Card, ax: int, ay: int, rot180: bool) -> TownMap:
-    """Place card at anchor (ax,ay), return new map (topmost wins)."""
-    new_m = dict(m)
+    """Place card at anchor (ax,ay), mutating m in-place. Returns m."""
     for i in (0, 1):
         for j in (0, 1):
-            new_m[(ax + i, ay + j)] = tile_at(card, i, j, rot180)
-    return new_m
+            m[(ax + i, ay + j)] = tile_at(card, i, j, rot180)
+    return m
 
 
 def legal_placements(m: TownMap, card: Card) -> List[Tuple[int, int, bool]]:
@@ -747,30 +728,6 @@ class GameState:
                 not self.free[0] and
                 not self.free[1] and
                 self.drafted == -1)
-
-    def freeze_key(self) -> tuple:
-        """Hashable key for transposition table."""
-        def canon_town(m: TownMap) -> tuple:
-            if not m:
-                return ()
-            xs = [x for (x, _) in m]
-            ys = [y for (_, y) in m]
-            x0, y0 = min(xs), min(ys)
-            items = tuple(sorted(
-                (x - x0, y - y0, int(t), int(ic)) for (x, y), (t, ic) in m.items()
-            ))
-            return items
-
-        return (
-            tuple(self.circle),
-            canon_town(self.towns[0]),
-            canon_town(self.towns[1]),
-            tuple(self.free[0]),
-            tuple(self.free[1]),
-            self.player,
-            int(self.phase),
-            self.drafted,
-        )
 
 
 def get_actions(state: GameState) -> list:
@@ -874,13 +831,9 @@ def _order_actions(state: GameState, actions: list) -> list:
 
 
 class AlphaBetaSolver:
-    """Alpha-beta solver with move ordering and transposition table.
-    Best for endgame positions."""
-
-    # TT flag constants
-    EXACT = 0
-    LOWERBOUND = 1
-    UPPERBOUND = 2
+    """Alpha-beta solver with move ordering. Best for endgame positions.
+    No transposition table: TT hit rate is <0.2% for this game
+    (placements create unique states), so freeze_key overhead isn't worth it."""
 
     def __init__(
         self,
@@ -894,8 +847,6 @@ class AlphaBetaSolver:
         self.nodes = 0
         self.deadline = 0.0
         self.depth_reached = 0
-        self.tt: Dict[tuple, Tuple[int, int, int]] = {}  # key -> (value, depth, flag)
-        self.tt_hits = 0
 
     def heuristic(self, state: GameState) -> int:
         return utility(state.towns[0], state.towns[1], self.bonus_names)
@@ -904,8 +855,6 @@ class AlphaBetaSolver:
         self.deadline = time.time() + self.time_limit
         self.nodes = 0
         self.depth_reached = 0
-        self.tt.clear()
-        self.tt_hits = 0
 
         best_val = None
         best_act = None
@@ -963,22 +912,6 @@ class AlphaBetaSolver:
         if depth <= 0:
             return self.heuristic(state)
 
-        # Transposition table lookup
-        key = state.freeze_key()
-        if key in self.tt:
-            tt_val, tt_depth, tt_flag = self.tt[key]
-            if tt_depth >= depth:
-                self.tt_hits += 1
-                if tt_flag == self.EXACT:
-                    return tt_val
-                elif tt_flag == self.LOWERBOUND:
-                    alpha = max(alpha, tt_val)
-                elif tt_flag == self.UPPERBOUND:
-                    beta = min(beta, tt_val)
-                if alpha >= beta:
-                    return tt_val
-
-        alpha_orig = alpha
         p = state.player
         actions = _order_actions(state, get_actions(state))
 
@@ -1002,15 +935,6 @@ class AlphaBetaSolver:
                     beta = best
                 if alpha >= beta:
                     break
-
-        # Store in transposition table
-        if best <= alpha_orig:
-            tt_flag = self.UPPERBOUND
-        elif best >= beta:
-            tt_flag = self.LOWERBOUND
-        else:
-            tt_flag = self.EXACT
-        self.tt[key] = (best, depth, tt_flag)
 
         return best
 
@@ -1401,21 +1325,63 @@ def pick_action_greedy(
 ) -> object:
     """Greedy 1-ply agent: pick action maximizing immediate utility.
     For draft decisions, simulates greedy placements through to next
-    draft to compare cards with their placements resolved."""
+    draft to compare cards with their placements resolved.
+    For placements, uses mutate-evaluate-undo to avoid state copies."""
     actions = get_actions(state)
     sign = 1 if state.player == 0 else -1
-    is_draft = state.phase == Phase.DRAFT
+
+    if state.phase == Phase.DRAFT:
+        # Draft: need full state copy to simulate placements
+        best_val = None
+        best_act = actions[0]
+        for a in actions:
+            child = apply_action(state, a)
+            child = _advance_greedy(child, bonus_names)
+            v = sign * utility(child.towns[0], child.towns[1], bonus_names)
+            if best_val is None or v > best_val:
+                best_val = v
+                best_act = a
+        return best_act
+
+    # Placement: mutate-evaluate-undo avoids ~80 state copies per decision
+    p = state.player
+    m = state.towns[p]
+    card_id = state.free[p][0] if state.phase == Phase.PLACE_FREE else state.drafted
+    card = CARDS[card_id]
+    t0, t1, t2, t3 = card.quads
+
     best_val = None
     best_act = actions[0]
-    for a in actions:
-        child = apply_action(state, a)
-        if is_draft:
-            # Simulate greedy placements to next draft/terminal
-            child = _advance_greedy(child, bonus_names)
-        v = sign * utility(child.towns[0], child.towns[1], bonus_names)
+    towns_0, towns_1 = state.towns[0], state.towns[1]
+
+    for ax, ay, rot180 in actions:
+        # Save existing cells
+        k0 = (ax, ay); k1 = (ax+1, ay); k2 = (ax, ay+1); k3 = (ax+1, ay+1)
+        s0 = m.get(k0); s1 = m.get(k1); s2 = m.get(k2); s3 = m.get(k3)
+
+        # Place card (mutate in-place)
+        if rot180:
+            m[k0] = t3; m[k1] = t2; m[k2] = t1; m[k3] = t0
+        else:
+            m[k0] = t0; m[k1] = t1; m[k2] = t2; m[k3] = t3
+
+        # Evaluate
+        v = sign * utility(towns_0, towns_1, bonus_names)
+
+        # Restore
+        if s0 is None: del m[k0]
+        else: m[k0] = s0
+        if s1 is None: del m[k1]
+        else: m[k1] = s1
+        if s2 is None: del m[k2]
+        else: m[k2] = s2
+        if s3 is None: del m[k3]
+        else: m[k3] = s3
+
         if best_val is None or v > best_val:
             best_val = v
-            best_act = a
+            best_act = (ax, ay, rot180)
+
     return best_act
 
 
@@ -1743,9 +1709,6 @@ def cmd_benchmark(n_games: int, time_limit: float, seed: int) -> None:
         "greedy_v_rand": [],
         "look_v_rand": [],
         "look_v_greedy": [],
-        "mcts_v_rand": [],
-        "mcts_v_greedy": [],
-        "mcts_v_look": [],
     }
 
     for i in range(n_games):
@@ -1784,41 +1747,12 @@ def cmd_benchmark(n_games: int, time_limit: float, seed: int) -> None:
         )
         results["look_v_greedy"].append(u_lg)
 
-        # MCTS vs Random
-        _, _, u_mr = play_game(
-            circle, bonus_names, start_index=0,
-            agent_p1="mcts", agent_p2="random",
-            time_limit=time_limit,
-            rng=random_module.Random(game_seed + 40000),
-        )
-        results["mcts_v_rand"].append(u_mr)
-
-        # MCTS vs Greedy
-        _, _, u_mg = play_game(
-            circle, bonus_names, start_index=0,
-            agent_p1="mcts", agent_p2="greedy",
-            time_limit=time_limit,
-            rng=random_module.Random(game_seed + 50000),
-        )
-        results["mcts_v_greedy"].append(u_mg)
-
-        # MCTS vs Lookahead
-        _, _, u_ml = play_game(
-            circle, bonus_names, start_index=0,
-            agent_p1="mcts", agent_p2="lookahead",
-            time_limit=time_limit,
-            rng=random_module.Random(game_seed + 60000),
-        )
-        results["mcts_v_look"].append(u_ml)
-
         def avg(vals):
             return sum(vals) / len(vals) if vals else 0
 
         print(f"  Game {i+1:3d}/{n_games}: "
-              f"LvG={u_lg:+d} MvG={u_mg:+d} MvL={u_ml:+d}  "
-              f"(avg LvG={avg(results['look_v_greedy']):+.1f} "
-              f"MvG={avg(results['mcts_v_greedy']):+.1f} "
-              f"MvL={avg(results['mcts_v_look']):+.1f})")
+              f"LvG={u_lg:+d}  "
+              f"(avg LvG={avg(results['look_v_greedy']):+.1f})")
 
     print()
     print("=== Results ===")
@@ -1828,9 +1762,6 @@ def cmd_benchmark(n_games: int, time_limit: float, seed: int) -> None:
         ("Greedy vs Random", "greedy_v_rand"),
         ("Lookahead vs Random", "look_v_rand"),
         ("Lookahead vs Greedy", "look_v_greedy"),
-        ("MCTS vs Random", "mcts_v_rand"),
-        ("MCTS vs Greedy", "mcts_v_greedy"),
-        ("MCTS vs Lookahead", "mcts_v_look"),
     ]:
         vals = results[key]
         avg_v = sum(vals) / len(vals)
@@ -1986,11 +1917,23 @@ def cmd_analyze(n_games: int, seed: int) -> None:
 
     # Bonus analysis
     print("Bonus breakdown (avg per game when active):")
+    bonus_ranked = []
     for name in sorted(bonus_totals.keys()):
         p1_total, p2_total, count = bonus_totals[name]
         avg1 = p1_total / count if count > 0 else 0
         avg2 = p2_total / count if count > 0 else 0
-        print(f"  {name:22s}: P1={avg1:+5.1f}  P2={avg2:+5.1f}  (in {count} games)")
+        avg_combined = (p1_total + p2_total) / count if count > 0 else 0
+        print(f"  {name:22s}: P1={avg1:+5.1f}  P2={avg2:+5.1f}  "
+              f"combined={avg_combined:+5.1f}  (in {count} games)")
+        bonus_ranked.append((avg_combined, name))
+    print()
+
+    # Bonus power ranking
+    bonus_ranked.sort(reverse=True)
+    print("Bonus power ranking (highest avg combined score):")
+    for rank, (avg_val, name) in enumerate(bonus_ranked, 1):
+        bar = "#" * max(0, int(avg_val / 2))
+        print(f"  {rank:2d}. {name:22s}  {avg_val:+5.1f}  {bar}")
     print()
 
     # Town sizes

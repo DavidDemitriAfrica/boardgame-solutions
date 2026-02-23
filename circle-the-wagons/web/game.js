@@ -531,11 +531,10 @@ export function candidateAnchors(m) {
 }
 
 export function placeCard(m, card, ax, ay, rot180) {
-  const newM = new Map(m);
   for (let i = 0; i < 2; i++)
     for (let j = 0; j < 2; j++)
-      newM.set(cellKey(ax + i, ay + j), tileAt(card, i, j, rot180));
-  return newM;
+      m.set(cellKey(ax + i, ay + j), tileAt(card, i, j, rot180));
+  return m;
 }
 
 export function legalPlacements(m, card) {

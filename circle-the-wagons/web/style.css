@@ -91,6 +91,15 @@ button:disabled { opacity: 0.4; cursor: not-allowed; }
 .hint-thinking {
   opacity: 0.6;
   cursor: wait;
+  animation: pulse 1s ease-in-out infinite;
+}
+@keyframes pulse {
+  0%, 100% { opacity: 0.4; }
+  50% { opacity: 0.8; }
+}
+
+.score-zero {
+  opacity: 0.4;
 }
 
 #status-bar {
@@ -202,6 +211,8 @@ button:disabled { opacity: 0.4; cursor: not-allowed; }
 #circle-area {
   text-align: center;
   padding: 0.5rem 1rem 0;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
 }
 
 #circle-area h2 {

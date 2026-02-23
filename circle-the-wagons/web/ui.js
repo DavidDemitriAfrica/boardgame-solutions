@@ -4,10 +4,9 @@
 import {
   Terr, Icon, Phase, CARDS, CARD_BONUS_MAP, BONUS_DESCRIPTIONS,
   TERR_SHORT, ICON_SHORT, TERR_NAMES, tileAt, cellKey, parseKey,
-  townGet, townHas, candidateAnchors, placeCard, legalPlacements,
+  townGet, townHas, candidateAnchors,
   terrainScore, computeScores, computeScoreBreakdown, utility,
   generateDeal, makeInitialState, getActions, applyAction, GameState,
-  footprint,
 } from './game.js';
 
 import { pickActionGreedy, pickActionLookahead } from './ai.js';
@@ -347,7 +346,8 @@ function renderScores() {
       const val = breakdown[name] || 0;
       const row = document.createElement('div');
       row.className = 'score-row';
-      row.innerHTML = `<span class="score-label">${name}</span><span class="score-val">${val >= 0 ? '+' : ''}${val}</span>`;
+      row.innerHTML = `<span class="score-label">${name}</span><span class="score-val">${val > 0 ? '+' : ''}${val}</span>`;
+      if (val === 0) row.classList.add('score-zero');
       el.appendChild(row);
     }
 
@@ -655,7 +655,11 @@ function startGame() {
 const undoBtn = $('undo-btn');
 const hintBtn = $('hint-btn');
 newGameBtn.addEventListener('click', startGame);
-endCloseBtn.addEventListener('click', startGame);
+endCloseBtn.addEventListener('click', () => {
+  // Increment seed so "Play Again" gives a new game
+  seedInput.value = (parseInt(seedInput.value) || 42) + 1;
+  startGame();
+});
 draftConfirmBtn.addEventListener('click', confirmDraft);
 draftCancelBtn.addEventListener('click', cancelDraft);
 undoBtn.addEventListener('click', undoAction);
@@ -686,9 +690,10 @@ document.addEventListener('keydown', (e) => {
       e.target.tagName !== 'INPUT' && e.target.tagName !== 'SELECT') {
     doRotate();
   }
-  // Enter to confirm draft, Escape to cancel
-  if (e.key === 'Enter' && selectedDraftOffset !== null) {
-    confirmDraft();
+  // Enter to confirm draft or placement, Escape to cancel
+  if (e.key === 'Enter') {
+    if (selectedDraftOffset !== null) confirmDraft();
+    else if (ghostAnchor) handlePlacement(ghostAnchor[0], ghostAnchor[1]);
   }
   if (e.key === 'Escape') {
     if (selectedDraftOffset !== null) cancelDraft();
@@ -715,11 +720,15 @@ function showHint() {
   if (busy || !state || state.player !== 0 || state.isTerminal()) return;
   busy = true;
   setStatus('Computing hint...');
+  hintBtn.classList.add('hint-thinking');
+  document.body.style.cursor = 'wait';
 
   // Use setTimeout to let the status render before computation
   setTimeout(() => {
     const action = pickActionLookahead(state, state.bonusNames);
     busy = false;
+    hintBtn.classList.remove('hint-thinking');
+    document.body.style.cursor = '';
     if (!action) { setStatus('No hint available.'); return; }
 
     if (action.type === 'draft') {
