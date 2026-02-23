@@ -3,7 +3,7 @@
 
 import {
   Phase, CARDS, getActions, applyAction, utility, legalPlacements,
-  placeCard, candidateAnchors, parseKey, ANCHOR_OFFSETS, cellKey,
+  candidateAnchors, parseKey, ANCHOR_OFFSETS, cellKey, tileAt,
 } from './game.js';
 
 // ============================================================================
@@ -14,20 +14,55 @@ export function pickActionGreedy(state, bonusNames) {
   const actions = getActions(state);
   if (actions.length === 0) return null;
   const sign = state.player === 0 ? 1 : -1;
-  const isDraft = state.phase === Phase.DRAFT;
+
+  if (state.phase === Phase.DRAFT) {
+    // Draft: need full state copy to simulate placements
+    let bestVal = -Infinity;
+    let bestAct = actions[0];
+    for (const a of actions) {
+      let child = applyAction(state, a);
+      child = advanceGreedy(child, bonusNames);
+      const v = sign * utility(child.towns[0], child.towns[1], bonusNames);
+      if (v > bestVal) { bestVal = v; bestAct = a; }
+    }
+    return bestAct;
+  }
+
+  // Placement: mutate-evaluate-undo to avoid ~80 state copies
+  const p = state.player;
+  const m = state.towns[p];
+  const cardId = state.phase === Phase.PLACE_FREE ? state.free[p][0] : state.drafted;
+  const card = CARDS[cardId];
+  const [t0, t1, t2, t3] = card.quads;
+  const towns0 = state.towns[0], towns1 = state.towns[1];
+
   let bestVal = -Infinity;
   let bestAct = actions[0];
-  for (const a of actions) {
-    let child = applyAction(state, a);
-    if (isDraft) {
-      // Simulate greedy placements to evaluate draft quality
-      child = advanceGreedy(child, bonusNames);
+
+  for (const [ax, ay, rot180] of actions) {
+    const k0 = cellKey(ax, ay), k1 = cellKey(ax+1, ay);
+    const k2 = cellKey(ax, ay+1), k3 = cellKey(ax+1, ay+1);
+
+    // Save
+    const s0 = m.get(k0), s1v = m.get(k1), s2v = m.get(k2), s3 = m.get(k3);
+
+    // Place
+    if (rot180) {
+      m.set(k0, t3); m.set(k1, t2); m.set(k2, t1); m.set(k3, t0);
+    } else {
+      m.set(k0, t0); m.set(k1, t1); m.set(k2, t2); m.set(k3, t3);
     }
-    const v = sign * utility(child.towns[0], child.towns[1], bonusNames);
-    if (v > bestVal) {
-      bestVal = v;
-      bestAct = a;
-    }
+
+    // Evaluate
+    const v = sign * utility(towns0, towns1, bonusNames);
+
+    // Restore
+    if (s0 === undefined) m.delete(k0); else m.set(k0, s0);
+    if (s1v === undefined) m.delete(k1); else m.set(k1, s1v);
+    if (s2v === undefined) m.delete(k2); else m.set(k2, s2v);
+    if (s3 === undefined) m.delete(k3); else m.set(k3, s3);
+
+    if (v > bestVal) { bestVal = v; bestAct = [ax, ay, rot180]; }
   }
   return bestAct;
 }

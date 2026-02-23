@@ -1962,6 +1962,109 @@ def cmd_analyze(n_games: int, seed: int) -> None:
         print(f"  Card {cid:2d} ({bonus:22s}): drafted {count} times")
 
 
+def _pick_action_fast(state: GameState, bonus_names) -> object:
+    """Fast greedy agent for bulk analysis. No draft simulation."""
+    actions = get_actions(state)
+    if not actions:
+        return None
+    sign = 1 if state.player == 0 else -1
+
+    if state.phase == Phase.DRAFT:
+        # Simple heuristic: prefer low offsets (skip fewer cards)
+        return actions[0]
+
+    # Placement: mutate-evaluate-undo
+    p = state.player
+    m = state.towns[p]
+    card_id = state.free[p][0] if state.phase == Phase.PLACE_FREE else state.drafted
+    card = CARDS[card_id]
+    t0, t1, t2, t3 = card.quads
+
+    best_val = None
+    best_act = actions[0]
+    towns_0, towns_1 = state.towns[0], state.towns[1]
+
+    for ax, ay, rot180 in actions:
+        k0 = (ax, ay); k1 = (ax+1, ay); k2 = (ax, ay+1); k3 = (ax+1, ay+1)
+        s0 = m.get(k0); s1_v = m.get(k1); s2_v = m.get(k2); s3 = m.get(k3)
+        if rot180:
+            m[k0] = t3; m[k1] = t2; m[k2] = t1; m[k3] = t0
+        else:
+            m[k0] = t0; m[k1] = t1; m[k2] = t2; m[k3] = t3
+        v = sign * utility(towns_0, towns_1, bonus_names)
+        if s0 is None: del m[k0]
+        else: m[k0] = s0
+        if s1_v is None: del m[k1]
+        else: m[k1] = s1_v
+        if s2_v is None: del m[k2]
+        else: m[k2] = s2_v
+        if s3 is None: del m[k3]
+        else: m[k3] = s3
+        if best_val is None or v > best_val:
+            best_val = v
+            best_act = (ax, ay, rot180)
+    return best_act
+
+
+def cmd_openings(n_games: int, seed: int) -> None:
+    """Analyze starting position advantage across many deals."""
+    print(f"=== Starting Position Analysis ({n_games} deals) ===")
+    print("  For each deal, play fast greedy at all 15 starting positions.\n")
+
+    # Per-position stats
+    position_utils = [[] for _ in range(15)]
+
+    for i in range(n_games):
+        game_seed = seed + i
+        bonus_names, circle = generate_deal(game_seed)
+        n = len(circle)
+
+        pos_results = []
+        for start_idx in range(n):
+            state = make_initial_state(circle, bonus_names, start_idx)
+            while not state.is_terminal():
+                action = _pick_action_fast(state, bonus_names)
+                state = apply_action(state, action)
+            s1, s2 = compute_scores(state.towns[0], state.towns[1], bonus_names)
+            u = s1 - s2
+            position_utils[start_idx].append(u)
+            pos_results.append(u)
+
+        if (i + 1) % 10 == 0 or i == 0:
+            avg_range = sum(max(position_utils[j]) - min(position_utils[j])
+                           for j in range(n) if position_utils[j]) / n
+            print(f"  {i+1}/{n_games}: avg position swing = {avg_range:.1f}")
+
+    print()
+    print("=== Position Analysis ===\n")
+
+    # Overall utility by starting position
+    print("Average utility by starting position (P1 - P2):")
+    print("  Higher = better for P1 (worse for P2 who chose this start)")
+    print()
+    for idx in range(15):
+        vals = position_utils[idx]
+        if not vals:
+            continue
+        avg_u = sum(vals) / len(vals)
+        p1_wins = sum(1 for v in vals if v > 0)
+        bar = "#" * max(0, int((avg_u + 10) / 2))
+        print(f"  Start {idx:2d}: avg={avg_u:+5.1f}  P1 wins {p1_wins}/{len(vals)}  {bar}")
+
+    print()
+
+    # Utility range (how much starting position matters)
+    avg_utils = [sum(v)/len(v) for v in position_utils if v]
+    swing = max(avg_utils) - min(avg_utils)
+    best_for_p2 = min(range(15), key=lambda i: sum(position_utils[i])/len(position_utils[i]))
+    worst_for_p2 = max(range(15), key=lambda i: sum(position_utils[i])/len(position_utils[i]))
+    print(f"Starting position swing: {swing:.1f} utility points")
+    print(f"Best start for P2 (lowest P1 utility): position {best_for_p2} "
+          f"(avg {sum(position_utils[best_for_p2])/len(position_utils[best_for_p2]):+.1f})")
+    print(f"Worst start for P2: position {worst_for_p2} "
+          f"(avg {sum(position_utils[worst_for_p2])/len(position_utils[worst_for_p2]):+.1f})")
+
+
 def cmd_solve(time_limit: float, seed: int) -> None:
     bonus_names, circle = generate_deal(seed)
     print(f"Deal (seed={seed}):")
@@ -1988,6 +2091,8 @@ def main() -> None:
                         help="Demo exact endgame solving")
     parser.add_argument("--analyze", action="store_true",
                         help="Detailed game statistics for the paper")
+    parser.add_argument("--openings", action="store_true",
+                        help="Analyze starting position advantage")
     parser.add_argument("-n", type=int, default=20,
                         help="Number of benchmark/analysis games (default: 20)")
     parser.add_argument("--time-limit", type=float, default=1.0,
@@ -2006,6 +2111,8 @@ def main() -> None:
         cmd_endgame(args.seed)
     elif args.analyze:
         cmd_analyze(args.n, args.seed)
+    elif args.openings:
+        cmd_openings(args.n, args.seed)
     else:
         cmd_solve(args.time_limit, args.seed)
 
