@@ -106,10 +106,18 @@ export function pickActionLookahead(state, bonusNames) {
   let bestVal = -Infinity;
   let bestAct = null;
 
+  // Pre-sort draft actions by greedy evaluation for better minimax pruning
   const draftActions = getActions(state);
-  for (const draftAct of draftActions) {
-    let child = applyAction(state, draftAct);
+  const scored = [];
+  for (const da of draftActions) {
+    let child = applyAction(state, da);
     child = advanceGreedy(child, bonusNames);
+    const v = sign * utility(child.towns[0], child.towns[1], bonusNames);
+    scored.push([v, da, child]);
+  }
+  scored.sort((a, b) => b[0] - a[0]);
+
+  for (const [, draftAct, child] of scored) {
     const v = sign * draftMinimax(child, bonusNames, draftDepth - 1);
     if (v > bestVal) {
       bestVal = v;

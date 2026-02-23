@@ -1465,10 +1465,17 @@ def pick_action_lookahead(
     best_val = None
     best_act = None
 
-    for draft_act in get_actions(state):
-        child = apply_action(state, draft_act)
-        # Greedy-place the drafted card + any free cards until next draft
+    # Pre-sort draft actions by greedy evaluation for better pruning
+    draft_actions = get_actions(state)
+    scored = []
+    for da in draft_actions:
+        child = apply_action(state, da)
         child = _advance_greedy(child, bonus_names)
+        v = sign * utility(child.towns[0], child.towns[1], bonus_names)
+        scored.append((v, da, child))
+    scored.sort(reverse=True)  # best first for current player
+
+    for _, draft_act, child in scored:
         v = sign * _draft_minimax(child, bonus_names, draft_depth - 1)
         if best_val is None or v > best_val:
             best_val = v
