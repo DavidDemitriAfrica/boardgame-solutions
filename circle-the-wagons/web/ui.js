@@ -682,7 +682,8 @@ function doRotate() {
 rotateBtn.addEventListener('click', doRotate);
 
 document.addEventListener('keydown', (e) => {
-  if ((e.key === 'r' || e.key === 'R') && !placementPanel.classList.contains('hidden')) {
+  if ((e.key === 'r' || e.key === 'R') && !placementPanel.classList.contains('hidden') &&
+      e.target.tagName !== 'INPUT' && e.target.tagName !== 'SELECT') {
     doRotate();
   }
   // Enter to confirm draft, Escape to cancel
@@ -699,8 +700,9 @@ document.addEventListener('keydown', (e) => {
     e.preventDefault();
     undoAction();
   }
-  // H for hint
-  if ((e.key === 'h' || e.key === 'H') && !e.ctrlKey && !e.metaKey) {
+  // H for hint (but not when typing in input fields)
+  if ((e.key === 'h' || e.key === 'H') && !e.ctrlKey && !e.metaKey &&
+      e.target.tagName !== 'INPUT' && e.target.tagName !== 'SELECT') {
     showHint();
   }
 });
