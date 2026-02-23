@@ -1399,7 +1399,7 @@ def pick_action_lookahead(
     state: GameState,
     bonus_names: Tuple[str, str, str],
     endgame_cards: int = 4,
-    endgame_time: float = 5.0,
+    endgame_time: float = 2.0,
     draft_depth: int = -1,  # -1 = auto (2 when <=8 cards, 1 otherwise)
 ) -> object:
     """Lookahead agent: greedy for placements, minimax for drafts.

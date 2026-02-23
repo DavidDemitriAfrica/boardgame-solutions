@@ -16,7 +16,7 @@ A two-player micro card game by Steven Aramini, Danny Devine, and Paul Shortino 
 - Complete game engine with all 18 territory cards and 18 bonus scoring rules
 - Four agents: Random, Greedy (1-ply), Lookahead (draft minimax + greedy placements), MCTS
 - Alpha-beta endgame solver (~5,000 nodes/s)
-- Lookahead beats Greedy 76% over 50 games (avg +4.1), both crush Random
+- Lookahead beats Greedy 72% over 50 games (36-14, avg +2.7), both crush Random 100%
 - Draft minimax with alpha-beta pruning: 3-ply at ≤6 cards, 2-ply at ≤8, 1-ply otherwise
 - Greedy placement uses mutate-evaluate-undo for zero-copy scoring
 - Game analysis mode with bonus power rankings, drafting patterns, card popularity
@@ -45,15 +45,28 @@ python solver.py --benchmark -n 50 --seed 1
 # Exact endgame solving demo
 python solver.py --endgame --seed 42
 
-# Detailed game statistics
+# Detailed game statistics + bonus power rankings
 python solver.py --analyze -n 50 --seed 1
+
+# Starting position advantage analysis
+python solver.py --openings -n 50 --seed 1
 ```
+
+## Game statistics (from `--analyze` and `--openings`)
+
+- **First-mover advantage**: P1 wins ~65% (Lookahead vs Lookahead, 20 games)
+- **Starting position swing**: ~5.4 utility points — P2's choice of starting position matters
+- **Branching factor**: ~80 for placements, ~10 for drafts
+- **Avg game length**: ~9.6 draft decisions, ~30 total actions
+- **Scoring**: terrain ~30 pts, bonuses ~15 pts per player
+- **Strongest bonuses**: TARGET PRACTICE (+28), COOL WATER (+24), BOOM OR BUST (+19)
+- **Weakest bonuses**: ONE TOO MANY (-1), CIRCLE THE WAGONS (+3), FORTIFIED (+3.5)
 
 ## Project structure
 
 ```
 circle-the-wagons/
-  solver.py          # Game engine + all agents + CLI (~1900 lines)
+  solver.py          # Game engine + all agents + CLI (~2100 lines)
   assets/            # PNP PDF and rules image
   web/
     index.html       # Playable web version
