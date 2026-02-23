@@ -134,15 +134,15 @@ export function pickActionLookahead(state, bonusNames) {
   }
 
   // Auto draft depth: deeper when fewer cards remain
+  // Alpha-beta pruning at root + move ordering make deeper search feasible
   const n = state.circle.length;
-  const draftDepth = n <= 6 ? 3 : n <= 8 ? 2 : 1;
+  const draftDepth = n <= 8 ? 3 : n <= 10 ? 2 : 1;
 
-  const sign = state.player === 0 ? 1 : -1;
-  let bestVal = -Infinity;
-  let bestAct = null;
+  const p = state.player;
 
-  // Pre-sort draft actions by greedy evaluation for better minimax pruning
+  // Pre-sort draft actions by greedy evaluation for better pruning
   const draftActions = getActions(state);
+  const sign = p === 0 ? 1 : -1;
   const scored = [];
   for (const da of draftActions) {
     let child = applyAction(state, da);
@@ -152,11 +152,20 @@ export function pickActionLookahead(state, bonusNames) {
   }
   scored.sort((a, b) => b[0] - a[0]);
 
-  for (const [, draftAct, child] of scored) {
-    const v = sign * draftMinimax(child, bonusNames, draftDepth - 1);
-    if (v > bestVal) {
-      bestVal = v;
-      bestAct = draftAct;
+  // Alpha-beta at root: prune draft actions that can't improve on best
+  let bestAct = scored[0][1];
+  let alpha = -999999, beta = 999999;
+  if (p === 0) {
+    for (const [, draftAct, child] of scored) {
+      const v = draftMinimax(child, bonusNames, draftDepth - 1, alpha, beta);
+      if (v > alpha) { alpha = v; bestAct = draftAct; }
+      if (alpha >= beta) break;
+    }
+  } else {
+    for (const [, draftAct, child] of scored) {
+      const v = draftMinimax(child, bonusNames, draftDepth - 1, alpha, beta);
+      if (v < beta) { beta = v; bestAct = draftAct; }
+      if (alpha >= beta) break;
     }
   }
   return bestAct;

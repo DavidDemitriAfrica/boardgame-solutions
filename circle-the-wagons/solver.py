@@ -5,10 +5,10 @@ Circle the Wagons -- Game engine and solver.
 Single-file implementation:
   - Full game state representation and transition function
   - All 18 bonus scoring cards (verified from PNP)
-  - MCTS solver for full-game play
-  - Alpha-beta endgame solver with transposition table
-  - Player 2 starting-card optimizer
-  - Benchmark and playthrough modes
+  - Lookahead agent: draft minimax + greedy placement (strongest)
+  - Alpha-beta endgame solver with aspiration windows
+  - MCTS solver, player 2 starting-card optimizer
+  - Benchmark, analysis, and playthrough modes
 
 Usage:
     python solver.py                       # solve a sample deal
@@ -861,7 +861,16 @@ class AlphaBetaSolver:
 
         for depth in range(1, self.max_depth + 1):
             try:
-                v, a = self._root_search(state, depth)
+                if best_val is not None:
+                    # Aspiration window: search with narrow bounds first
+                    window = 20
+                    v, a = self._root_search(state, depth,
+                                             best_val - window, best_val + window)
+                    if v <= best_val - window or v >= best_val + window:
+                        # Fell outside window, re-search with full bounds
+                        v, a = self._root_search(state, depth)
+                else:
+                    v, a = self._root_search(state, depth)
                 best_val, best_act = v, a
                 self.depth_reached = depth
                 if state.is_terminal():
@@ -874,13 +883,13 @@ class AlphaBetaSolver:
 
         return best_val, best_act
 
-    def _root_search(self, state: GameState, depth: int) -> Tuple[int, object]:
+    def _root_search(self, state: GameState, depth: int,
+                     alpha: int = -999999, beta: int = 999999) -> Tuple[int, object]:
         actions = get_actions(state)
         if not actions:
             return self.heuristic(state), None
 
         p = state.player
-        alpha, beta = -999999, 999999
         actions = _order_actions(state, actions)
 
         best_act = actions[0]
@@ -1417,19 +1426,18 @@ def pick_action_lookahead(
         return pick_action_greedy(state, bonus_names)
 
     # Auto-select draft depth: deeper when fewer cards remain
-    # Depth 3: ~1-3s at ≤6 cards, depth 2: ~1-3s at ≤8 cards
+    # Alpha-beta pruning at root + move ordering make deeper search feasible
     if draft_depth < 0:
         n_circle = len(state.circle)
-        if n_circle <= 6:
+        if n_circle <= 8:
             draft_depth = 3
-        elif n_circle <= 8:
+        elif n_circle <= 10:
             draft_depth = 2
         else:
             draft_depth = 1
 
-    sign = 1 if state.player == 0 else -1
-    best_val = None
-    best_act = None
+    p = state.player
+    sign = 1 if p == 0 else -1
 
     # Pre-sort draft actions by greedy evaluation for better pruning
     draft_actions = get_actions(state)
@@ -1441,11 +1449,25 @@ def pick_action_lookahead(
         scored.append((v, da, child))
     scored.sort(reverse=True)  # best first for current player
 
-    for _, draft_act, child in scored:
-        v = sign * _draft_minimax(child, bonus_names, draft_depth - 1)
-        if best_val is None or v > best_val:
-            best_val = v
-            best_act = draft_act
+    # Alpha-beta at root: prune draft actions that can't improve on best
+    best_act = scored[0][1]
+    alpha, beta = -999999, 999999
+    if p == 0:
+        for _, draft_act, child in scored:
+            v = _draft_minimax(child, bonus_names, draft_depth - 1, alpha, beta)
+            if v > alpha:
+                alpha = v
+                best_act = draft_act
+            if alpha >= beta:
+                break
+    else:
+        for _, draft_act, child in scored:
+            v = _draft_minimax(child, bonus_names, draft_depth - 1, alpha, beta)
+            if v < beta:
+                beta = v
+                best_act = draft_act
+            if alpha >= beta:
+                break
 
     return best_act
 

@@ -436,6 +436,15 @@ button:disabled { opacity: 0.4; cursor: not-allowed; }
   border: 2px dashed var(--accent);
 }
 
+.cell.just-placed {
+  animation: place-flash 0.6s ease-out;
+}
+
+@keyframes place-flash {
+  0% { box-shadow: 0 0 12px 4px rgba(233,69,96,0.7); transform: scale(1.08); }
+  100% { box-shadow: none; transform: scale(1); }
+}
+
 .cell.anchor-highlight {
   outline: 2px solid rgba(255, 215, 0, 0.6);
   outline-offset: -1px;
@@ -566,6 +575,34 @@ button:disabled { opacity: 0.4; cursor: not-allowed; }
 }
 
 #end-scores .winner { color: #ffd700; font-weight: 700; font-size: 1.1rem; }
+
+/* Footer */
+footer {
+  text-align: center;
+  padding: 1rem;
+  margin-top: 1rem;
+  font-size: 0.75rem;
+  color: rgba(224, 224, 224, 0.4);
+  border-top: 1px solid rgba(255,255,255,0.05);
+}
+
+footer a {
+  color: rgba(224, 224, 224, 0.5);
+}
+
+footer .shortcuts {
+  margin-top: 0.3rem;
+  font-size: 0.7rem;
+}
+
+footer kbd {
+  background: rgba(255,255,255,0.1);
+  border: 1px solid rgba(255,255,255,0.15);
+  border-radius: 3px;
+  padding: 0 3px;
+  font-family: inherit;
+  font-size: inherit;
+}
 
 /* Hidden utility */
 .hidden { display: none !important; }

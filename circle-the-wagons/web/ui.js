@@ -53,6 +53,7 @@ let selectedDraftOffset = null;
 let placementAnchors = null;  // Set of "x,y" strings for valid anchors
 let ghostAnchor = null;       // [x, y] currently hovered anchor
 let busy = false;             // prevent clicks during AI turn
+let lastPlacedCells = [null, null]; // [P1 cells, P2 cells] - Set of keys just placed
 
 // ============================================================================
 // Rendering: cells
@@ -273,7 +274,11 @@ function renderTown(playerIdx) {
         }
         el.appendChild(cell);
       } else if (tile) {
-        el.appendChild(makeCell(tile[0], tile[1]));
+        const c = makeCell(tile[0], tile[1]);
+        if (lastPlacedCells[playerIdx] && lastPlacedCells[playerIdx].has(k)) {
+          c.classList.add('just-placed');
+        }
+        el.appendChild(c);
       } else {
         const cell = document.createElement('div');
         cell.className = 'cell empty-cell';
@@ -433,6 +438,7 @@ function handlePlacement(ax, ay) {
   log(`You place ${label} #${cardId} at (${ax},${ay})${rot180 ? ' rotated' : ''}`, 0);
   stateHistory.push(state);
   hidePlacementUI();
+  lastPlacedCells[0] = new Set([cellKey(ax,ay), cellKey(ax+1,ay), cellKey(ax,ay+1), cellKey(ax+1,ay+1)]);
   state = applyAction(state, action);
   rot180 = false;
   rotateBtn.classList.remove('active');
@@ -445,6 +451,7 @@ function handlePlacement(ax, ay) {
 
 function selectDraft(offset) {
   if (busy || state.player !== 0 || state.phase !== Phase.DRAFT) return;
+  lastPlacedCells[0] = null; // clear flash on new interaction
   if (offset < 0 || offset >= state.circle.length) return;
   selectedDraftOffset = offset;
   draftControls.style.display = '';
@@ -523,6 +530,7 @@ async function aiTurn() {
       if (isFree) {
         setStatus(`AI placing free cards (${state.free[1].length} left)...`);
       }
+      lastPlacedCells[1] = new Set([cellKey(ax,ay), cellKey(ax+1,ay), cellKey(ax,ay+1), cellKey(ax+1,ay+1)]);
     }
 
     state = applyAction(state, action);
@@ -631,6 +639,7 @@ function startGame() {
   ghostAnchor = null;
   busy = false;
   stateHistory = [];
+  lastPlacedCells = [null, null];
   logContent.innerHTML = '';
   endModal.classList.add('hidden');
   draftControls.classList.add('hidden');
@@ -710,6 +719,15 @@ document.addEventListener('keydown', (e) => {
       e.target.tagName !== 'INPUT' && e.target.tagName !== 'SELECT') {
     showHint();
   }
+  // Number keys 1-9 for quick draft selection
+  if (e.key >= '1' && e.key <= '9' && !e.ctrlKey && !e.metaKey &&
+      e.target.tagName !== 'INPUT' && e.target.tagName !== 'SELECT') {
+    const offset = parseInt(e.key) - 1;
+    if (state && state.phase === Phase.DRAFT && state.player === 0 && !busy &&
+        offset < state.circle.length) {
+      selectDraft(offset);
+    }
+  }
 });
 
 // ============================================================================
@@ -755,6 +773,7 @@ function undoAction() {
   if (busy || stateHistory.length === 0) return;
   state = stateHistory.pop();
   rot180 = false;
+  lastPlacedCells = [null, null];
   rotateBtn.classList.remove('active');
   selectedDraftOffset = null;
   ghostAnchor = null;
